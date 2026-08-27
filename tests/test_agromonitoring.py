@@ -74,7 +74,7 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
         self.db.query(SatelliteAnalysisCache).delete()
         self.db.commit()
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_agromonitoring_auth_failure(self, mock_urlopen, mock_key):
         # Mock 401/403 authentication error
@@ -89,7 +89,7 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 503)
         self.assertEqual(ctx.exception.detail, "AgroMonitoring API authentication failed")
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_agromonitoring_api_rate_limiting(self, mock_urlopen, mock_key):
         # Mock 429 rate limiting error
@@ -104,7 +104,7 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
         self.assertEqual(ctx.exception.status_code, 429)
         self.assertEqual(ctx.exception.detail, "AgroMonitoring API rate limit reached")
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_agromonitoring_api_timeout(self, mock_urlopen, mock_key):
         # Mock timeout error
@@ -119,17 +119,17 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
     @patch("os.getenv")
     def test_api_key_security(self, mock_getenv):
         # Verify the API key is not printed or returned in exception details
-        mock_getenv.side_effect = lambda key, default="": "35c3682795c14edee7dd512a190128e5" if key == "AGROMONITORING_API_KEY" else default
+        mock_getenv.side_effect = lambda key, default="": "TEST_AGROMONITORING_KEY" if key == "AGROMONITORING_API_KEY" else default
         
         # Test key redaction in logging helper
         from app.services.agromonitoring_service import make_agromonitoring_request
         from fastapi import HTTPException
         with self.assertRaises(HTTPException) as ctx:
             # Passes invalid URL containing API key to trigger request error
-            make_agromonitoring_request("http://api.agromonitoring.com/agro/1.0/polygons?appid=35c3682795c14edee7dd512a190128e5", method="POST")
-        self.assertNotIn("35c3682795c14edee7dd512a190128e5", str(ctx.exception.detail))
+            make_agromonitoring_request("http://api.agromonitoring.com/agro/1.0/polygons?appid=TEST_AGROMONITORING_KEY", method="POST")
+        self.assertNotIn("TEST_AGROMONITORING_KEY", str(ctx.exception.detail))
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_polygon_caching_and_scaling(self, mock_urlopen, mock_key):
         # Mock success creation response
@@ -162,7 +162,7 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
         self.assertEqual(cached_poly_id, "poly12345")
         mock_urlopen.assert_not_called()
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_ndvi_retrieval_and_satellite_cache(self, mock_urlopen, mock_key):
         # Mock responses:
@@ -233,7 +233,7 @@ class TestAgroMonitoringIntegration(unittest.TestCase):
         self.assertEqual(data_cached["ndvi"], 0.72)
         mock_urlopen.assert_not_called()
 
-    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="35c3682795c14edee7dd512a190128e5")
+    @patch("app.services.agromonitoring_service.get_agromonitoring_api_key", return_value="TEST_AGROMONITORING_KEY")
     @patch("urllib.request.urlopen")
     def test_missing_satellite_data(self, mock_urlopen, mock_key):
         # Seed polygon

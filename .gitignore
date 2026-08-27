@@ -11,3 +11,7 @@ __pycache__/
 *credentials.json
 *.pem
 *.key
+
+*.db.bak
+
+app/uploads/

@@ -251,11 +251,12 @@ def make_agromonitoring_request(url: str, method: str = "GET", data_dict: dict =
         "User-Agent": "KrishiVisionBackend/1.0"
     }
     
-    # Redact API key from logs/errors
-    safe_url = url
     api_key = get_agromonitoring_api_key()
-    if api_key:
-        safe_url = url.replace(api_key, "REDACTED_API_KEY")
+    if not api_key or not api_key.strip():
+        raise HTTPException(status_code=503, detail="AgroMonitoring API key is not configured")
+
+    # Redact API key from logs/errors
+    safe_url = url.replace(api_key, "REDACTED_API_KEY")
 
     logger.info(f"[AgroMonitoring API Request] Method: {method}, URL: {safe_url}")
     
@@ -295,7 +296,10 @@ def make_agromonitoring_request(url: str, method: str = "GET", data_dict: dict =
             raise HTTPException(status_code=503, detail="Satellite service temporarily unavailable")
     except Exception as e:
         elapsed = time.time() - req_start
-        logger.error(f"[AgroMonitoring Connection Error] Time: {elapsed:.4f}s, Error: {e}")
+        err_msg = str(e)
+        if api_key:
+            err_msg = err_msg.replace(api_key, "REDACTED_API_KEY")
+        logger.error(f"[AgroMonitoring Connection Error] Time: {elapsed:.4f}s, Error: {err_msg}")
         raise HTTPException(status_code=503, detail="Satellite service temporarily unavailable")
 
 def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> str:
@@ -317,7 +321,7 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
     # 2. Key not configured verification
     api_key = get_agromonitoring_api_key()
     if not api_key:
-        raise HTTPException(status_code=503, detail="AgroMonitoring API authentication failed")
+        raise HTTPException(status_code=503, detail="AgroMonitoring API key is not configured")
 
     # 3. Query the API for all registered polygons to check for matches by district and crop name (strict)
     api_polys = []

@@ -17,6 +17,6 @@ COPY . .
 EXPOSE 8000
 
 ENV DATABASE_URL="sqlite:///./krishivision.db"
-ENV JWT_SECRET="production-secret-change-in-config"
+ENV JWT_SECRET_KEY="production-secret-change-in-config"
 
 CMD uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8000}

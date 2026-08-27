@@ -47,8 +47,8 @@ Configure these keys in the **Environment** tab on Render. **Never** include the
 | Key | Example / Description |
 |---|---|
 | `DATABASE_URL` | `postgresql://user:password@host:5432/dbname` *(Safest persistent option)* or `sqlite:///./krishivision.db` |
-| `JWT_SECRET` | A secure cryptographically random key string for user JWT tokens |
-| `AGROMONITORING_API_KEY` | `35c3682795c14edee7dd512a190128e5` |
+| `JWT_SECRET_KEY` | A secure cryptographically random key string for user JWT tokens |
+| `AGROMONITORING_API_KEY` | Set this securely to your new rotated API key |
 | `DATA_GOV_API_KEY` | Your personal `data.gov.in` API key for crop statistics |
 
 ---

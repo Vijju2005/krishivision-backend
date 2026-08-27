@@ -3,7 +3,10 @@ from datetime import datetime, timedelta
 from jose import jwt
 import bcrypt
 
-SECRET_KEY = os.getenv("JWT_SECRET", "dev-secret-change-in-production")
+SECRET_KEY = os.getenv("JWT_SECRET_KEY")
+if not SECRET_KEY:
+    raise RuntimeError("JWT_SECRET_KEY environment variable is not configured")
+
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 days
 
