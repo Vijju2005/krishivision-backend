@@ -7,7 +7,7 @@ class TestCropHealthClassification(unittest.TestCase):
         # NDVI=0.78, EVI=0.72, NDWI=0.45
         status, score = classify_crop_health_score(ndvi=0.78, evi=0.72, ndwi=0.45)
         self.assertEqual(status, "Good")
-        self.assertGreaterEqual(score, 75)
+        self.assertGreaterEqual(score, 70)
         print(f"\n[Health Test] Good Metrics: Score={score}, Status={status}")
 
     def test_moderate_metrics_returns_moderate(self):
@@ -15,7 +15,7 @@ class TestCropHealthClassification(unittest.TestCase):
         # NDVI=0.52, EVI=0.48, NDWI=0.10
         status, score = classify_crop_health_score(ndvi=0.52, evi=0.48, ndwi=0.10)
         self.assertEqual(status, "Moderate")
-        self.assertTrue(50 <= score < 75)
+        self.assertTrue(40 <= score < 70)
         print(f"[Health Test] Moderate Metrics: Score={score}, Status={status}")
 
     def test_poor_metrics_returns_poor(self):
@@ -23,22 +23,22 @@ class TestCropHealthClassification(unittest.TestCase):
         # NDVI=0.25, EVI=0.20, NDWI=-0.25
         status, score = classify_crop_health_score(ndvi=0.25, evi=0.20, ndwi=-0.25)
         self.assertEqual(status, "Poor")
-        self.assertLess(score, 50)
+        self.assertLess(score, 40)
         print(f"[Health Test] Poor Metrics: Score={score}, Status={status}")
 
     def test_no_observation_returns_unavailable(self):
-        """Verify that missing or invalid NDVI values result in a 'Satellite data unavailable' status."""
+        """Verify that missing or invalid NDVI values result in a 'Satellite data unavailable' status and None score."""
         status, score = classify_crop_health_score(ndvi=None)
         self.assertEqual(status, "Satellite data unavailable")
-        self.assertEqual(score, 0)
+        self.assertIsNone(score)
 
         status_zero, score_zero = classify_crop_health_score(ndvi=0.0)
         self.assertEqual(status_zero, "Satellite data unavailable")
-        self.assertEqual(score_zero, 0)
+        self.assertIsNone(score_zero)
 
         status_neg, score_neg = classify_crop_health_score(ndvi=-0.1)
         self.assertEqual(status_neg, "Satellite data unavailable")
-        self.assertEqual(score_neg, 0)
+        self.assertIsNone(score_neg)
         print(f"[Health Test] No Observation: Score={score}, Status={status}")
 
     def test_different_crops_receive_different_classifications(self):

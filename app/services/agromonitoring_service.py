@@ -697,14 +697,15 @@ def map_to_standard_stage(stage_name: str) -> str:
     return "Vegetative Growth"
 
 
-def classify_crop_health_score(ndvi: float | None, evi: float | None = None, ndwi: float | None = None) -> tuple[str, int]:
+def classify_crop_health_score(ndvi: float | None, evi: float | None = None, ndwi: float | None = None) -> tuple[str, int | None]:
     """
     Centralized health classification helper.
     Calculates health score (0-100) based on NDVI, EVI, and NDWI,
-    and classifies it as Good, Moderate, or Poor.
+    and classifies it as Good (>=70), Moderate (40-69), or Poor (<40).
+    When NDVI is unavailable, returns ("Satellite data unavailable", None).
     """
     if ndvi is None or ndvi <= 0.0:
-        return "Satellite data unavailable", 0
+        return "Satellite data unavailable", None
 
     # Calculate EVI approximation if not provided
     if evi is None or evi <= 0.0:
@@ -724,9 +725,9 @@ def classify_crop_health_score(ndvi: float | None, evi: float | None = None, ndw
     health_score = int(round(ndvi_contrib + evi_contrib + ndwi_contrib))
     health_score = max(0, min(100, health_score))
 
-    # Configurable thresholds
-    threshold_good = 75
-    threshold_moderate = 50
+    # Configurable thresholds matching project specification: 70+ Good, 40-69 Moderate, <40 Poor
+    threshold_good = 70
+    threshold_moderate = 40
 
     if health_score >= threshold_good:
         status = "Good"

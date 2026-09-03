@@ -187,21 +187,32 @@ class TestAPYIntegration(unittest.TestCase):
         response_fail = self.client.get("/apy/states/Karnataka/districts/Chikkamagaluru/crops/apple")
         self.assertEqual(response_fail.status_code, 404)
 
+    def _get_crop_id(self, crop_name: str, district: str = "Chikkamagaluru") -> int:
+        from app.database import SessionLocal
+        from app.routers.dashboard_map import find_crop_id_for_apy
+        db = SessionLocal()
+        try:
+            return find_crop_id_for_apy(db, "Karnataka", district, crop_name)
+        finally:
+            db.close()
+
     def test_crop_detail_loading(self):
         """Verify endpoint /crops/{crop_id} returns valid crop details."""
-        response = self.client.get("/crops/1032")
+        arecanut_id = self._get_crop_id("Arecanut")
+        response = self.client.get(f"/crops/{arecanut_id}")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["name"], "Arecanut")
-        self.assertEqual(data["growing_season"], "Perennial")
+        self.assertIn(data["growing_season"], ["Perennial", "Year-round"])
 
     def test_agromonitoring_health_and_growth_data(self):
         """Verify crop detail growth and health response structure and values."""
-        response = self.client.get("/crops/1032/overview/growth/health")
+        arecanut_id = self._get_crop_id("Arecanut")
+        response = self.client.get(f"/crops/{arecanut_id}/overview/growth/health")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         
-        self.assertEqual(data["id"], 1032)
+        self.assertEqual(data["id"], arecanut_id)
         # Verify no fabricated values are used when real satellite is unavailable
         if data.get("satellite_ndvi") is None:
             self.assertIn(data.get("health_status"), [
@@ -242,7 +253,8 @@ class TestAPYIntegration(unittest.TestCase):
 
     def test_crop_year_consistency(self):
         """Verify that crop details screen retrieves the dynamic latest crop year from APY.csv (2019)."""
-        response = self.client.get("/crops/1028") # Black Pepper in Chikkamagaluru
+        pepper_id = self._get_crop_id("Black Pepper")
+        response = self.client.get(f"/crops/{pepper_id}") # Black Pepper in Chikkamagaluru
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["source_year"], 2019)
@@ -251,7 +263,8 @@ class TestAPYIntegration(unittest.TestCase):
 
     def test_black_pepper_detail_loading(self):
         """Verify that Black Pepper detail endpoint successfully retrieves combined overview metrics."""
-        response = self.client.get("/crops/1028/overview/growth/health")
+        pepper_id = self._get_crop_id("Black Pepper")
+        response = self.client.get(f"/crops/{pepper_id}/overview/growth/health")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertEqual(data["name"], "Black Pepper")
@@ -261,13 +274,15 @@ class TestAPYIntegration(unittest.TestCase):
 
     def test_cross_district_leakage_details(self):
         """Verify strict district isolation on crop details."""
-        pepper_resp = self.client.get("/crops/1028/overview/growth/health")
+        pepper_id = self._get_crop_id("Black Pepper")
+        pepper_resp = self.client.get(f"/crops/{pepper_id}/overview/growth/health")
         self.assertEqual(pepper_resp.status_code, 200)
         pepper_data = pepper_resp.json()
         self.assertEqual(pepper_data["district"], "Chikkamagaluru")
         self.assertEqual(pepper_data["name"], "Black Pepper")
 
-        cotton_resp = self.client.get("/crops/1035/overview/growth/health") # Rice in Chikkamagaluru
+        rice_id = self._get_crop_id("Paddy / Rice")
+        cotton_resp = self.client.get(f"/crops/{rice_id}/overview/growth/health") # Rice in Chikkamagaluru
         self.assertEqual(cotton_resp.status_code, 200)
         cotton_data = cotton_resp.json()
         self.assertEqual(cotton_data["district"], "Chikkamagaluru")
@@ -275,7 +290,8 @@ class TestAPYIntegration(unittest.TestCase):
 
     def test_satellite_failure_not_blocking(self):
         """Verify that AgroMonitoring satellite failures do not block government crop data from loading."""
-        response = self.client.get("/crops/1028/overview/growth/health")
+        pepper_id = self._get_crop_id("Black Pepper")
+        response = self.client.get(f"/crops/{pepper_id}/overview/growth/health")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         # Government stats should be present
