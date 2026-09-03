@@ -469,8 +469,9 @@ def fetch_district_crops_from_api(
 
             print(f"[Crop API] Final result: {len(filtered_crops)} crops returned from local APY")
             return {
-                "state": normalized_state.title(),
-                "district": normalized_district.title(),
+                "status": "success",
+                "state": state.strip().title(),
+                "district": district.strip().title(),
                 "source": "APY Dataset",
                 "crops": filtered_crops
             }
@@ -652,6 +653,11 @@ def fetch_district_crops_from_api(
                 source = "Cached government data"
                 is_cached = True
             else:
+                if max_year is None:
+                    raise HTTPException(
+                        status_code=404,
+                        detail="No crop data available for this district"
+                    )
                 raise GovernmentCropDataUnavailableException(
                     "Government crop data temporarily unavailable"
                 )
@@ -665,6 +671,11 @@ def fetch_district_crops_from_api(
             source = "Cached government data"
             is_cached = True
         else:
+            if max_year is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="No crop data available for this district"
+                )
             raise GovernmentCropDataUnavailableException(
                 "Government crop data temporarily unavailable"
             )

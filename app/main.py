@@ -80,6 +80,14 @@ def startup_db_and_import():
             import_all_india_data(db)
         else:
             print("[Startup Coverage Audit] All-India database coverage verified complete.")
+            
+        # Seed APY dataset into database if not already present
+        try:
+            from app.services.apy_seeder import seed_apy_data_if_needed
+            seed_apy_data_if_needed(db)
+        except Exception as e_apy:
+            print(f"[Startup APY Seeding Error] Notice: {e_apy}")
+            
         db.close()
     except Exception as e:
         print(f"[Startup Seeding Error] Notice: {e}")
