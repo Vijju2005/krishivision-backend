@@ -36,14 +36,37 @@ def startup_db_and_import():
     except Exception as e:
         print(f"[Startup DB Init] Notice: {e}")
 
-    # 2. Seed database idempotently if empty
+    # 2. Seed database idempotently and upgrade rectangular boundaries if present
     try:
         import sys
         backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
         if backend_dir not in sys.path:
             sys.path.insert(0, backend_dir)
-        from load_sample_data import seed_database
-        seed_database()
+
+        from app.database import SessionLocal
+        from app.models.orm_models import State, District, Crop
+        db = SessionLocal()
+        state_count = db.query(State).count()
+        kar = db.query(State).filter(State.name.ilike('%karnataka%')).first()
+        is_rectangle = False
+        if kar and kar.boundary_geojson:
+            bg = kar.boundary_geojson
+            coords = bg.get("coordinates", [])
+            if bg.get("type") == "Polygon" and len(coords) == 1 and len(coords[0]) <= 5:
+                is_rectangle = True
+        
+        if state_count == 0 or is_rectangle:
+            print("[Startup Seeding] Replacing old rectangular boundary with authentic MultiPolygon...")
+            if is_rectangle:
+                db.query(Crop).delete()
+                db.query(District).delete()
+                db.query(State).delete()
+                db.commit()
+            db.close()
+            from load_sample_data import seed_database
+            seed_database()
+        else:
+            db.close()
         print("[Startup Seeding] Database seeding verification complete.")
     except Exception as e:
         print(f"[Startup Seeding] Notice: {e}")

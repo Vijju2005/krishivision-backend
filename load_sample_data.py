@@ -153,36 +153,42 @@ def seed_database():
         # Seed map boundaries and crop details if not already present
         if db.query(State).count() == 0:
             print("Seeding Map boundaries (State and Districts)...")
-            
-            # Karnataka State
+            base_dir = os.path.dirname(os.path.abspath(__file__))
+            state_json_path = os.path.join(base_dir, "karnataka_state_boundary.json")
+            dist_json_path = os.path.join(base_dir, "karnataka_districts_boundary.json")
+
+            karnataka_geom = None
+            districts_geom_map = {}
+
+            if os.path.exists(state_json_path):
+                with open(state_json_path, "r", encoding="utf-8") as f:
+                    karnataka_geom = json.load(f)
+            if os.path.exists(dist_json_path):
+                with open(dist_json_path, "r", encoding="utf-8") as f:
+                    districts_geom_map = json.load(f)
+
+            if not karnataka_geom:
+                try:
+                    from scripts.import_india_boundaries import main as import_boundaries
+                    import_boundaries()
+                except Exception as e:
+                    print(f"Error calling import_india_boundaries: {e}")
+                return
+
+            # Seed Karnataka State with authentic high-resolution MultiPolygon boundary
             karnataka = State(
                 name="Karnataka",
-                boundary_geojson={
-                    "type": "Polygon",
-                    "coordinates": [[
-                        [74.0, 11.5], [78.5, 11.5],
-                        [78.5, 18.5], [74.0, 18.5],
-                        [74.0, 11.5]
-                    ]]
-                }
+                boundary_geojson=karnataka_geom
             )
             db.add(karnataka)
             db.commit()
             db.refresh(karnataka)
 
-            # Seed 6 Districts
+            # Seed Karnataka Districts with authentic polygon boundaries
             districts_data = [
                 {
                     "name": "Belagavi",
                     "area": 24560.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [74.2, 15.6], [74.8, 15.6],
-                            [74.8, 16.2], [74.2, 16.2],
-                            [74.2, 15.6]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Sugarcane", "area": 1450.0, "percentage": 35.0, "stage": "Vegetative", "health": "Healthy", "harvest": 68, "fields": 18, "ndvi": 0.72, "evi": 0.58, "moisture": 32.0, "temp": 28.0},
                         {"name": "Paddy", "area": 980.0, "percentage": 24.0, "stage": "Tillering", "health": "Healthy", "harvest": 45, "fields": 12, "ndvi": 0.65, "evi": 0.52, "moisture": 40.0, "temp": 27.0},
@@ -193,14 +199,6 @@ def seed_database():
                 {
                     "name": "Dharwad",
                     "area": 18200.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [74.8, 15.2], [75.3, 15.2],
-                            [75.3, 15.7], [74.8, 15.7],
-                            [74.8, 15.2]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Cotton", "area": 1200.0, "percentage": 30.0, "stage": "Boll Formation", "health": "At Risk", "harvest": 20, "fields": 14, "ndvi": 0.42, "evi": 0.35, "moisture": 24.0, "temp": 31.0},
                         {"name": "Paddy", "area": 950.0, "percentage": 23.0, "stage": "Vegetative", "health": "Healthy", "harvest": 50, "fields": 10, "ndvi": 0.68, "evi": 0.55, "moisture": 38.0, "temp": 28.0}
@@ -209,14 +207,6 @@ def seed_database():
                 {
                     "name": "Haveri",
                     "area": 16800.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [75.1, 14.5], [75.6, 14.5],
-                            [75.6, 15.0], [75.1, 15.0],
-                            [75.1, 14.5]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Maize", "area": 1500.0, "percentage": 40.0, "stage": "Flowering", "health": "Healthy", "harvest": 45, "fields": 15, "ndvi": 0.58, "evi": 0.45, "moisture": 20.0, "temp": 29.0}
                     ]
@@ -224,14 +214,6 @@ def seed_database():
                 {
                     "name": "Gadag",
                     "area": 14200.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [75.4, 15.2], [75.9, 15.2],
-                            [75.9, 15.7], [75.4, 15.7],
-                            [75.4, 15.2]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Groundnut", "area": 1100.0, "percentage": 35.0, "stage": "Vegetative", "health": "Healthy", "harvest": 55, "fields": 11, "ndvi": 0.62, "evi": 0.49, "moisture": 30.0, "temp": 30.0}
                     ]
@@ -239,14 +221,6 @@ def seed_database():
                 {
                     "name": "Davanagere",
                     "area": 22400.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [75.7, 14.2], [76.2, 14.2],
-                            [76.2, 14.7], [75.7, 14.7],
-                            [75.7, 14.2]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Rice", "area": 1800.0, "percentage": 45.0, "stage": "Vegetative", "health": "Healthy", "harvest": 35, "fields": 22, "ndvi": 0.62, "evi": 0.50, "moisture": 35.0, "temp": 28.0}
                     ]
@@ -254,35 +228,60 @@ def seed_database():
                 {
                     "name": "Vijayapura",
                     "area": 28650.0,
-                    "boundary": {
-                        "type": "Polygon",
-                        "coordinates": [[
-                            [75.5, 16.5], [76.1, 16.5],
-                            [76.1, 17.1], [75.5, 17.1],
-                            [75.5, 16.5]
-                        ]]
-                    },
                     "crops": [
                         {"name": "Sugarcane", "area": 2200.0, "percentage": 38.0, "stage": "Vegetative", "health": "Healthy", "harvest": 75, "fields": 20, "ndvi": 0.70, "evi": 0.56, "moisture": 34.0, "temp": 29.0}
                     ]
                 }
             ]
 
+            # Seed CropMaster if empty
+            from app.models.orm_models import CropMaster
+            crop_masters_map = {}
+            if db.query(CropMaster).count() == 0:
+                crop_masters_data = [
+                    {"name": "Coffee", "scientific_name": "Coffea arabica", "category": "Beverage", "icon": "☕", "growing_season": "Year-round", "growth_duration": "9-10 Months", "description": "High-value beverage crop.", "growth_stages": ["Planting", "Vegetative Growth", "Flowering", "Pinhead Stage", "Berry Expansion", "Ripening", "Harvesting"]},
+                    {"name": "Black Pepper", "scientific_name": "Piper nigrum", "category": "Spice", "icon": "🌶", "growing_season": "Kharif", "growth_duration": "8-9 Months", "description": "King of Spices.", "growth_stages": ["Perennial Rooting", "Vine Growth", "Spike Emergence", "Flowering", "Berry Formation", "Ripening", "Harvesting"]},
+                    {"name": "Cardamom", "scientific_name": "Elettaria cardamomum", "category": "Spice", "icon": "🌿", "growing_season": "Year-round", "growth_duration": "10-12 Months", "description": "Queen of Spices.", "growth_stages": ["Planting", "Vegetative Growth", "Tillering", "Flowering & Fruit Set", "Capsule Maturity", "Harvesting"]},
+                    {"name": "Arecanut", "scientific_name": "Areca catechu", "category": "Commercial", "icon": "🌴", "growing_season": "Year-round", "growth_duration": "Multi-year", "description": "Betel nut palm.", "growth_stages": ["Seedling Transplant", "Juvenile Palm", "Crown Expansion", "Inflorescence Emergence", "Nut Setting", "Ripening", "Harvesting"]},
+                    {"name": "Rice", "scientific_name": "Oryza sativa", "category": "Cereal", "icon": "🌾", "growing_season": "Kharif/Rabi", "growth_duration": "4 Months", "description": "Staple food grain.", "growth_stages": ["Sowing", "Seedling", "Transplanting", "Tillering", "Panicle Initiation", "Flowering", "Harvesting"]},
+                    {"name": "Wheat", "scientific_name": "Triticum aestivum", "category": "Cereal", "icon": "🌾", "growing_season": "Rabi", "growth_duration": "5 Months", "description": "Staple food grain.", "growth_stages": ["Sowing", "Crown Root Initiation", "Tillering", "Jointing", "Flowering", "Milking", "Harvesting"]},
+                    {"name": "Maize", "scientific_name": "Zea mays", "category": "Cereal", "icon": "🌽", "growing_season": "Kharif", "growth_duration": "3.5 Months", "description": "Coarse cereal grain.", "growth_stages": ["Sowing", "Germination", "Vegetative Growth", "Tasseling", "Silking", "Dough Stage", "Harvesting"]},
+                    {"name": "Sugarcane", "scientific_name": "Saccharum officinarum", "category": "Commercial", "icon": "🎋", "growing_season": "Year-round", "growth_duration": "12-18 Months", "description": "Sugar crop.", "growth_stages": ["Germination", "Tillering", "Grand Growth", "Maturity", "Ripening", "Harvesting"]},
+                    {"name": "Cotton", "scientific_name": "Gossypium hirsutum", "category": "Commercial", "icon": "☁️", "growing_season": "Kharif", "growth_duration": "6 Months", "description": "Fibre crop.", "growth_stages": ["Sowing", "Seedling", "Square Formation", "Flowering", "Boll Development", "Boll Bursting", "Harvesting"]},
+                    {"name": "Groundnut", "scientific_name": "Arachis hypogaea", "category": "Oilseed", "icon": "🥜", "growing_season": "Kharif/Rabi", "growth_duration": "4 Months", "description": "Oilseed crop.", "growth_stages": ["Sowing", "Germination", "Vegetative Growth", "Flowering", "Pegging Stage", "Pod Development", "Harvesting"]}
+                ]
+                for cm in crop_masters_data:
+                    m = CropMaster(**cm)
+                    db.add(m)
+                    db.commit()
+                    db.refresh(m)
+                    crop_masters_map[m.name] = m.id
+            else:
+                for cm in db.query(CropMaster).all():
+                    crop_masters_map[cm.name] = cm.id
+
             for d_info in districts_data:
+                d_boundary = districts_geom_map.get(d_info["name"], {}).get("boundary")
                 district = District(
                     state_id=karnataka.id,
                     name=d_info["name"],
                     monitored_area_acres=d_info["area"],
-                    boundary_geojson=d_info["boundary"]
+                    boundary_geojson=d_boundary
                 )
                 db.add(district)
                 db.commit()
                 db.refresh(district)
 
                 for c_info in d_info["crops"]:
-                    # Create field polygon coordinates shifted slightly from district center
-                    lat = district.boundary_geojson["coordinates"][0][0][1] + 0.1
-                    lng = district.boundary_geojson["coordinates"][0][0][0] + 0.1
+                    lat = 15.0
+                    lng = 75.0
+                    if district.boundary_geojson and "coordinates" in district.boundary_geojson:
+                        bg = district.boundary_geojson
+                        if bg["type"] == "Polygon" and bg["coordinates"]:
+                            lng, lat = bg["coordinates"][0][0][0], bg["coordinates"][0][0][1]
+                        elif bg["type"] == "MultiPolygon" and bg["coordinates"]:
+                            lng, lat = bg["coordinates"][0][0][0][0], bg["coordinates"][0][0][0][1]
+
                     field_boundary = {
                         "type": "Polygon",
                         "coordinates": [[
@@ -291,8 +290,10 @@ def seed_database():
                             [lng, lat]
                         ]]
                     }
+                    master_id = crop_masters_map.get(c_info["name"])
                     crop = Crop(
                         district_id=district.id,
+                        crop_master_id=master_id,
                         name=c_info["name"],
                         area_acres=c_info["area"],
                         crop_percentage=c_info["percentage"],
