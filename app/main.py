@@ -268,6 +268,32 @@ def get_crop_api_status():
     }
 
 
+@app.get("/apy/status")
+def get_apy_db_status():
+    from .database import SessionLocal
+    from .models.orm_models import APYCropStatistic
+    db = SessionLocal()
+    try:
+        count = db.query(APYCropStatistic).count()
+        return {"status": "seeded" if count > 100000 else "empty", "count": count}
+    finally:
+        db.close()
+
+
+@app.get("/apy/seed")
+def trigger_apy_db_seed():
+    from .database import SessionLocal
+    from .models.orm_models import APYCropStatistic
+    from .services.apy_seeder import seed_apy_data_if_needed
+    db = SessionLocal()
+    try:
+        res = seed_apy_data_if_needed(db)
+        count = db.query(APYCropStatistic).count()
+        return {"success": res, "count": count}
+    finally:
+        db.close()
+
+
 @app.get("/crop-api/states")
 def get_crop_api_states():
     # Return the state names actually available in the dataset
