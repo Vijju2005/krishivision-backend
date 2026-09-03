@@ -234,32 +234,6 @@ def seed_database():
                 }
             ]
 
-            # Seed CropMaster if empty
-            from app.models.orm_models import CropMaster
-            crop_masters_map = {}
-            if db.query(CropMaster).count() == 0:
-                crop_masters_data = [
-                    {"name": "Coffee", "scientific_name": "Coffea arabica", "category": "Beverage", "icon": "☕", "growing_season": "Year-round", "growth_duration": "9-10 Months", "description": "High-value beverage crop.", "growth_stages": ["Planting", "Vegetative Growth", "Flowering", "Pinhead Stage", "Berry Expansion", "Ripening", "Harvesting"]},
-                    {"name": "Black Pepper", "scientific_name": "Piper nigrum", "category": "Spice", "icon": "🌶", "growing_season": "Kharif", "growth_duration": "8-9 Months", "description": "King of Spices.", "growth_stages": ["Perennial Rooting", "Vine Growth", "Spike Emergence", "Flowering", "Berry Formation", "Ripening", "Harvesting"]},
-                    {"name": "Cardamom", "scientific_name": "Elettaria cardamomum", "category": "Spice", "icon": "🌿", "growing_season": "Year-round", "growth_duration": "10-12 Months", "description": "Queen of Spices.", "growth_stages": ["Planting", "Vegetative Growth", "Tillering", "Flowering & Fruit Set", "Capsule Maturity", "Harvesting"]},
-                    {"name": "Arecanut", "scientific_name": "Areca catechu", "category": "Commercial", "icon": "🌴", "growing_season": "Year-round", "growth_duration": "Multi-year", "description": "Betel nut palm.", "growth_stages": ["Seedling Transplant", "Juvenile Palm", "Crown Expansion", "Inflorescence Emergence", "Nut Setting", "Ripening", "Harvesting"]},
-                    {"name": "Rice", "scientific_name": "Oryza sativa", "category": "Cereal", "icon": "🌾", "growing_season": "Kharif/Rabi", "growth_duration": "4 Months", "description": "Staple food grain.", "growth_stages": ["Sowing", "Seedling", "Transplanting", "Tillering", "Panicle Initiation", "Flowering", "Harvesting"]},
-                    {"name": "Wheat", "scientific_name": "Triticum aestivum", "category": "Cereal", "icon": "🌾", "growing_season": "Rabi", "growth_duration": "5 Months", "description": "Staple food grain.", "growth_stages": ["Sowing", "Crown Root Initiation", "Tillering", "Jointing", "Flowering", "Milking", "Harvesting"]},
-                    {"name": "Maize", "scientific_name": "Zea mays", "category": "Cereal", "icon": "🌽", "growing_season": "Kharif", "growth_duration": "3.5 Months", "description": "Coarse cereal grain.", "growth_stages": ["Sowing", "Germination", "Vegetative Growth", "Tasseling", "Silking", "Dough Stage", "Harvesting"]},
-                    {"name": "Sugarcane", "scientific_name": "Saccharum officinarum", "category": "Commercial", "icon": "🎋", "growing_season": "Year-round", "growth_duration": "12-18 Months", "description": "Sugar crop.", "growth_stages": ["Germination", "Tillering", "Grand Growth", "Maturity", "Ripening", "Harvesting"]},
-                    {"name": "Cotton", "scientific_name": "Gossypium hirsutum", "category": "Commercial", "icon": "☁️", "growing_season": "Kharif", "growth_duration": "6 Months", "description": "Fibre crop.", "growth_stages": ["Sowing", "Seedling", "Square Formation", "Flowering", "Boll Development", "Boll Bursting", "Harvesting"]},
-                    {"name": "Groundnut", "scientific_name": "Arachis hypogaea", "category": "Oilseed", "icon": "🥜", "growing_season": "Kharif/Rabi", "growth_duration": "4 Months", "description": "Oilseed crop.", "growth_stages": ["Sowing", "Germination", "Vegetative Growth", "Flowering", "Pegging Stage", "Pod Development", "Harvesting"]}
-                ]
-                for cm in crop_masters_data:
-                    m = CropMaster(**cm)
-                    db.add(m)
-                    db.commit()
-                    db.refresh(m)
-                    crop_masters_map[m.name] = m.id
-            else:
-                for cm in db.query(CropMaster).all():
-                    crop_masters_map[cm.name] = cm.id
-
             for d_info in districts_data:
                 d_boundary = districts_geom_map.get(d_info["name"], {}).get("boundary")
                 district = District(
@@ -290,10 +264,8 @@ def seed_database():
                             [lng, lat]
                         ]]
                     }
-                    master_id = crop_masters_map.get(c_info["name"])
                     crop = Crop(
                         district_id=district.id,
-                        crop_master_id=master_id,
                         name=c_info["name"],
                         area_acres=c_info["area"],
                         crop_percentage=c_info["percentage"],

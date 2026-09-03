@@ -36,7 +36,7 @@ def startup_db_and_import():
     except Exception as e:
         print(f"[Startup DB Init] Notice: {e}")
 
-    # 2. Seed database idempotently and upgrade rectangular boundaries if present
+    # 2. Idempotent All-India database coverage audit & seeding
     try:
         import sys
         backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
@@ -45,8 +45,12 @@ def startup_db_and_import():
 
         from app.database import SessionLocal
         from app.models.orm_models import State, District, Crop
+        from sqlalchemy import func
+
         db = SessionLocal()
         state_count = db.query(State).count()
+        district_count = db.query(District).count()
+
         kar = db.query(State).filter(State.name.ilike('%karnataka%')).first()
         is_rectangle = False
         if kar and kar.boundary_geojson:
@@ -54,22 +58,31 @@ def startup_db_and_import():
             coords = bg.get("coordinates", [])
             if bg.get("type") == "Polygon" and len(coords) == 1 and len(coords[0]) <= 5:
                 is_rectangle = True
-        
-        if state_count == 0 or is_rectangle:
-            print("[Startup Seeding] Replacing old rectangular boundary with authentic MultiPolygon...")
+
+        print(f"[Startup Coverage Audit] States: {state_count}/35, Districts: {district_count}/594, Rectangular boundary: {is_rectangle}")
+
+        if state_count < 35 or district_count < 500 or is_rectangle:
+            print("[Startup Seeding] All-India database coverage incomplete. Running idempotent boundary import...")
             if is_rectangle:
+                # Clean up legacy rectangular entries if present
                 db.query(Crop).delete()
                 db.query(District).delete()
                 db.query(State).delete()
                 db.commit()
-            db.close()
-            from load_sample_data import seed_database
-            seed_database()
+
+            try:
+                from load_sample_data import seed_database
+                seed_database()
+            except Exception as e_user:
+                print(f"[Startup User Seed Notice] {e_user}")
+
+            from scripts.import_india_boundaries import import_all_india_data
+            import_all_india_data(db)
         else:
-            db.close()
-        print("[Startup Seeding] Database seeding verification complete.")
+            print("[Startup Coverage Audit] All-India database coverage verified complete.")
+        db.close()
     except Exception as e:
-        print(f"[Startup Seeding] Notice: {e}")
+        print(f"[Startup Seeding Error] Notice: {e}")
 
     # 2. Invalidate satellite analysis cache on startup to clear old stale/fake records
     try:
