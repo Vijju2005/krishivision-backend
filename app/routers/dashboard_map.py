@@ -678,6 +678,35 @@ def get_india_api_status(db: Session = Depends(get_db)):
     }
 
 
+@router.get("/crops/apy/status")
+def get_apy_status(db: Session = Depends(get_db)):
+    """
+    Diagnostic endpoint showing row count and status of the APY dataset table.
+    """
+    from ..models.orm_models import APYCropStatistic
+    count = db.query(APYCropStatistic).count()
+    return {
+        "status": "seeded" if count > 100000 else "empty",
+        "count": count,
+        "table": "apy_crop_statistics"
+    }
+
+
+@router.get("/crops/apy/seed")
+def trigger_apy_seed(db: Session = Depends(get_db)):
+    """
+    Triggers APY dataset seeding if needed.
+    """
+    from ..services.apy_seeder import seed_apy_data_if_needed
+    from ..models.orm_models import APYCropStatistic
+    res = seed_apy_data_if_needed(db)
+    count = db.query(APYCropStatistic).count()
+    return {
+        "success": res,
+        "count": count
+    }
+
+
 @router.get("/crops/india/district")
 def get_india_district_crops(
     state: str,
