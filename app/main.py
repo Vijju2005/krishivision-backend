@@ -11,49 +11,6 @@ from .database import Base, engine
 from .routers import auth, analysis, fields, weather, admin, notifications, settings, dashboard_map, district_analysis
 from .services.crop_api_service import GovernmentCropDataUnavailableException
 
-# Ensure database tables are created automatically on launch
-Base.metadata.create_all(bind=engine)
-
-# Invalidate satellite analysis cache on startup to clear old stale/fake records
-try:
-    from .database import SessionLocal
-    from .models.orm_models import SatelliteAnalysisCache
-    db = SessionLocal()
-    deleted = db.query(SatelliteAnalysisCache).delete()
-    db.commit()
-    db.close()
-    print(f"[Startup Invalidation] Purged {deleted} stale satellite analysis cache records.")
-except Exception as e:
-    print(f"[Startup Invalidation] Failed to purge satellite cache: {e}")
-
-
-# Add new profile/farmer columns if they don't exist
-from sqlalchemy import text
-cols_to_add = [
-    ("profile_photo", "VARCHAR"),
-    ("farmer_name", "VARCHAR"),
-    ("state_location", "VARCHAR"),
-    ("district_location", "VARCHAR"),
-    ("village_location", "VARCHAR"),
-    ("farm_name", "VARCHAR"),
-    ("total_farm_area", "FLOAT DEFAULT 0.0"),
-    ("primary_crop", "VARCHAR"),
-    ("other_crops", "VARCHAR"),
-    ("soil_type", "VARCHAR"),
-    ("irrigation_type", "VARCHAR"),
-    ("farming_experience", "INTEGER DEFAULT 0"),
-    ("my_crops", "VARCHAR"),
-    ("farming_type", "VARCHAR"),
-    ("preferred_language", "VARCHAR DEFAULT 'en'"),
-    ("main_farming_season", "VARCHAR"),
-]
-for col_name, col_type in cols_to_add:
-    try:
-        with engine.begin() as conn:
-            conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};"))
-    except Exception as e:
-        pass
-
 app = FastAPI(
     title="KrishiVision",
     description="Backend for smart crop monitoring using satellite images.",
@@ -72,9 +29,53 @@ async def gov_crop_data_unavailable_exception_handler(request, exc: GovernmentCr
     )
 
 @app.on_event("startup")
-def import_crop_master_csv():
-    print("[Backend] URL: http://192.168.9.107:8000")
-    # Safe startup diagnostics for data.gov.in API key
+def startup_db_and_import():
+    # 1. Ensure database tables are created automatically on launch
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"[Startup DB Init] Notice: {e}")
+
+    # 2. Invalidate satellite analysis cache on startup to clear old stale/fake records
+    try:
+        from .database import SessionLocal
+        from .models.orm_models import SatelliteAnalysisCache
+        db = SessionLocal()
+        deleted = db.query(SatelliteAnalysisCache).delete()
+        db.commit()
+        db.close()
+        print(f"[Startup Invalidation] Purged {deleted} stale satellite analysis cache records.")
+    except Exception as e:
+        print(f"[Startup Invalidation] Failed to purge satellite cache: {e}")
+
+    # 3. Add new profile/farmer columns if they don't exist
+    from sqlalchemy import text
+    cols_to_add = [
+        ("profile_photo", "VARCHAR"),
+        ("farmer_name", "VARCHAR"),
+        ("state_location", "VARCHAR"),
+        ("district_location", "VARCHAR"),
+        ("village_location", "VARCHAR"),
+        ("farm_name", "VARCHAR"),
+        ("total_farm_area", "FLOAT DEFAULT 0.0"),
+        ("primary_crop", "VARCHAR"),
+        ("other_crops", "VARCHAR"),
+        ("soil_type", "VARCHAR"),
+        ("irrigation_type", "VARCHAR"),
+        ("farming_experience", "INTEGER DEFAULT 0"),
+        ("my_crops", "VARCHAR"),
+        ("farming_type", "VARCHAR"),
+        ("preferred_language", "VARCHAR DEFAULT 'en'"),
+        ("main_farming_season", "VARCHAR"),
+    ]
+    for col_name, col_type in cols_to_add:
+        try:
+            with engine.begin() as conn:
+                conn.execute(text(f"ALTER TABLE users ADD COLUMN {col_name} {col_type};"))
+        except Exception:
+            pass
+
+    # 4. Diagnostics & CSV Crop Master Import
     api_key = os.getenv("DATA_GOV_API_KEY", "")
     key_configured = bool(api_key and api_key.strip() and api_key != "YOUR_PERSONAL_DATA_GOV_API_KEY")
     print(f"[DATA_GOV] API key configured: {str(key_configured).lower()}")
