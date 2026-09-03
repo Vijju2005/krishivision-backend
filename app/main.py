@@ -36,6 +36,18 @@ def startup_db_and_import():
     except Exception as e:
         print(f"[Startup DB Init] Notice: {e}")
 
+    # 2. Seed database idempotently if empty
+    try:
+        import sys
+        backend_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        if backend_dir not in sys.path:
+            sys.path.insert(0, backend_dir)
+        from load_sample_data import seed_database
+        seed_database()
+        print("[Startup Seeding] Database seeding verification complete.")
+    except Exception as e:
+        print(f"[Startup Seeding] Notice: {e}")
+
     # 2. Invalidate satellite analysis cache on startup to clear old stale/fake records
     try:
         from .database import SessionLocal
