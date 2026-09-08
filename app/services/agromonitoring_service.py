@@ -897,57 +897,39 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
                     cloud_cover = stats.get("cloud_cover")
                     resolution = stats.get("resolution", "10m / Sen2Cor BOA")
                 
-                if satellite_ndvi is not None:
+                if satellite_ndvi is not None or satellite_evi is not None:
                     satellite_status = "SATELLITE ACTIVE"
                     has_real_satellite = True
                 else:
-                    satellite_status = "NO VALID OBSERVATION"
+                    satellite_status = "SATELLITE DATA UNAVAILABLE"
                 
                 try:
                     satellite_history = fetch_ndvi_history(db, state_name, district_name, crop_name)
                 except Exception:
                     pass
             else:
-                satellite_status = "NO VALID OBSERVATION"
+                satellite_status = "SATELLITE DATA UNAVAILABLE"
         except HTTPException as he:
             logger.error(f"[AgroMonitoring] HTTP error in analysis helper: {he.detail}")
-            if he.status_code in [401, 403] or "authentication" in str(he.detail).lower():
-                satellite_status = "SATELLITE AUTHENTICATION FAILED"
-            elif he.status_code == 429:
-                satellite_status = "SATELLITE SERVICE ERROR"
-            elif he.status_code == 404:
-                satellite_status = "NO VALID OBSERVATION"
-            else:
-                satellite_status = "SATELLITE DATA UNAVAILABLE"
+            satellite_status = "SATELLITE DATA UNAVAILABLE"
             satellite_error_detail = he.detail
         except Exception as e:
             logger.error(f"[AgroMonitoring] Error fetching in analysis helper: {e}")
-            satellite_status = "SATELLITE SERVICE ERROR"
+            satellite_status = "SATELLITE DATA UNAVAILABLE"
             satellite_error_detail = "Satellite service temporarily unavailable"
     else:
         satellite_status = "SATELLITE DATA UNAVAILABLE"
         satellite_error_detail = "Satellite data unavailable"
 
-    # Baseline/database value fallbacks if live satellite is unavailable
-    if satellite_ndvi is None and crop.avg_ndvi is not None and crop.avg_ndvi > 0:
-        satellite_ndvi = crop.avg_ndvi
-        satellite_evi = crop.avg_evi
-        satellite_status = "SATELLITE ACTIVE"
-        has_real_satellite = True
-        if not satellite_observation_date:
-            satellite_observation_date = datetime.utcnow().strftime("%Y-%m-%d")
-
-    # Default fallback values for root fields
-    latest_ndvi = satellite_ndvi
-    mean_ndvi = satellite_ndvi
-    ndvi_trend = "stable"
-    observation_count = len(satellite_history) if satellite_history else 1
-    observation_date = satellite_observation_date or datetime.utcnow().strftime("%Y-%m-%d")
-    latest_evi = satellite_evi
-
+    # Default values based on satellite availability
     if has_real_satellite:
+        latest_ndvi = satellite_ndvi
+        mean_ndvi = satellite_ndvi
+        latest_evi = satellite_evi
+        observation_date = satellite_observation_date
+        observation_count = len(satellite_history) if satellite_history else 1
+
         if satellite_history:
-            observation_count = len(satellite_history)
             valid_means = [h["mean"] for h in satellite_history if h.get("mean") is not None]
             if valid_means:
                 mean_ndvi = sum(valid_means) / len(valid_means)
@@ -959,24 +941,25 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
                     ndvi_trend = "declining"
                 else:
                     ndvi_trend = "stable"
+            else:
+                ndvi_trend = "stable"
+        else:
+            ndvi_trend = "stable"
 
-        # Centralized health classification (single source of truth)
         health_status, health_index = classify_crop_health_score(
-            latest_ndvi, 
+            latest_ndvi if latest_ndvi is not None else latest_evi, 
             latest_evi, 
             crop.moisture_level / 100.0 if crop.moisture_level is not None else None
         )
         
-        # Growth Classification using crop-specific phenology
         current_stage, progress_percent, next_stage, estimated_days_to_next_stage = estimate_crop_growth_stage(
             crop_name,
-            observation_date,
+            observation_date or datetime.utcnow().strftime("%Y-%m-%d"),
             latest_ndvi,
             ndvi_trend,
             growing_season
         )
         
-        # Estimate harvest in days
         est_days = estimated_days_to_next_stage
         if est_days <= 0:
             est_days = 5
@@ -987,41 +970,32 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         else:
             confidence = 80.0
             
-        data_source = "Sentinel-2 / AgroMonitoring" if sat_data else "APY Dataset / data.gov.in"
-            
+        data_source = "Sentinel-2 / AgroMonitoring"
     else:
-        # UNAVAILABLE or INSUFFICIENT_OBSERVATIONS (No database fallback NDVI found either)
+        latest_ndvi = None
+        mean_ndvi = None
+        latest_evi = None
+        observation_date = None
+        observation_count = 0
+        ndvi_trend = "stable"
+        
         health_status = "Satellite data unavailable"
         health_index = None
-        
-        # If database has a valid growth stage and harvest prediction, let's use it as baseline
-        db_stage = getattr(crop, "growth_stage", None)
-        db_harvest = getattr(crop, "harvest_in_days", None)
-        
-        if db_stage and db_stage.strip() and db_stage.strip().lower() not in ["unanalyzed", "data unavailable", "null", "undefined"]:
-            current_stage = map_to_standard_stage(db_stage)
-            progress_percent = 0
-            next_stage = "Maturity"
-            estimated_days_to_next_stage = db_harvest or 25
-            estimated_harvest_date = (datetime.utcnow() + timedelta(days=estimated_days_to_next_stage)).strftime("%Y-%m-%d")
-            confidence = 0.70
-            data_source = "APY Dataset / data.gov.in"
-        else:
-            current_stage = "Satellite data unavailable"
-            progress_percent = 0
-            next_stage = "Satellite data unavailable"
-            estimated_days_to_next_stage = None
-            estimated_harvest_date = None
-            confidence = 0.0
-            data_source = "Satellite data unavailable"
+        current_stage = "Growth stage unavailable"
+        progress_percent = 0
+        next_stage = "Growth stage unavailable"
+        estimated_days_to_next_stage = None
+        estimated_harvest_date = None
+        confidence = 0.0
+        data_source = "Satellite data unavailable"
 
     health_obj = {
         "status": health_status,
         "latest_ndvi": latest_ndvi,
         "mean_ndvi": mean_ndvi,
         "trend": ndvi_trend,
-        "observation_date": observation_date if latest_ndvi is not None else None,
-        "observation_count": observation_count if latest_ndvi is not None else 0
+        "observation_date": observation_date,
+        "observation_count": observation_count
     }
     
     growth_obj = {
@@ -1033,13 +1007,11 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "confidence": confidence
     }
     
-    # Clean temperature and moisture placeholders
     moisture_val = (crop.moisture_level if crop.moisture_level and crop.moisture_level > 0.0 else None)
-    if not moisture_val and latest_ndvi is not None:
-        # Get from NDWI if available
-        ndwi_val = sat_data.get("ndwi") if sat_data else None
+    if not moisture_val and latest_ndvi is not None and sat_data:
+        ndwi_val = sat_data.get("ndwi")
         if ndwi_val is not None:
-            moisture_val = ndwi_val * 100.0
+            moisture_val = round(ndwi_val * 100.0, 2)
             
     temp_val = crop.temperature if crop.temperature and crop.temperature > 0.0 else None
     
@@ -1049,10 +1021,13 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "state": state_name,
         "district": district_name,
         "area_acres": crop.area_acres,
-        "satellite_status": satellite_status,
-        "satellite_platform": "Sentinel-2" if latest_ndvi is not None else None,
-        "observation_date": observation_date if latest_ndvi is not None else None,
-        "data_status": "REAL_DATA" if crop.area_acres else "NO_DATA",
+        "cultivated_area_acres": crop.area_acres,
+        "area_scope": "crop_in_district",
+        "satellite_available": has_real_satellite,
+        "satellite_status": satellite_status if has_real_satellite else "SATELLITE DATA UNAVAILABLE",
+        "satellite_platform": "Sentinel-2" if has_real_satellite else None,
+        "observation_date": observation_date,
+        "data_status": "REAL_DATA" if has_real_satellite else "NO_DATA",
         "health": health_obj,
         "growth": growth_obj,
         "health_status": health_status,
@@ -1063,7 +1038,7 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "mean_ndvi": mean_ndvi,
         "ndvi_trend": ndvi_trend,
         "latest_evi": latest_evi,
-        "observation_count": observation_count if latest_ndvi is not None else 0,
+        "observation_count": observation_count,
         "current_growth_stage": current_stage,
         "growth_progress_percent": progress_percent,
         "next_growth_stage": next_stage,
@@ -1071,10 +1046,10 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "estimated_harvest_date": estimated_harvest_date,
         "confidence": confidence,
         "data_source": data_source,
-        "moisture": moisture_val,
-        "temp": temp_val,
-        "temperature": temp_val,
-        "cloud_cover": cloud_cover,
-        "resolution": resolution
+        "moisture": moisture_val if has_real_satellite else None,
+        "temp": temp_val if has_real_satellite else None,
+        "temperature": temp_val if has_real_satellite else None,
+        "cloud_cover": cloud_cover if has_real_satellite else None,
+        "resolution": resolution if has_real_satellite else None
     }
 

@@ -26,12 +26,16 @@ def get_district_crop_analysis(district_name: str, db: Session = Depends(get_db)
     
     state_name = db_district.state.name if (db_district and db_district.state) else "Karnataka"
     
-    if not cache_record:
+    from .dashboard_map import get_district_monitored_area_acres
+    area_acres = get_district_monitored_area_acres(db, state_name, normalized_name)
+    area_hectares = round(area_acres * 0.404686, 1)
+
+    if cache_record:
+        cache_record.cropland_area_acres = area_acres
+        cache_record.cropland_area_hectares = area_hectares
+        db.commit()
+    else:
         # Dynamically seed/calculate and cache
-        area_acres = db_district.monitored_area_acres if (db_district and db_district.monitored_area_acres > 0) else 120000.0
-        area_hectares = round(area_acres * 0.404686, 1)
-        
-        # Default/realistic NDVI statistics
         mean_ndvi = 0.65
         min_ndvi = 0.15
         max_ndvi = 0.85
@@ -108,6 +112,11 @@ def get_district_crop_analysis(district_name: str, db: Session = Depends(get_db)
         "state": state_name,
         "cropland_area_hectares": cache_record.cropland_area_hectares,
         "cropland_area_acres": cache_record.cropland_area_acres,
+        "monitored_area_acres": cache_record.cropland_area_acres,
+        "monitored_area_label": "Total APY Crop Area Reported",
+        "monitored_area_source": "APY Dataset (Gross Cropped Area)",
+        "monitored_area_scope": "district_total_crop_area",
+        "area_scope": "district",
         "mean_ndvi": cache_record.mean_ndvi,
         "min_ndvi": cache_record.min_ndvi,
         "max_ndvi": cache_record.max_ndvi,

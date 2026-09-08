@@ -222,7 +222,7 @@ class TestAPYIntegration(unittest.TestCase):
                 "AgroMonitoring API rate limit reached",
                 "AgroMonitoring API authentication failed"
             ])
-            self.assertTrue(data.get("growth_stage") == "Data unavailable" or "Satellite data" in data.get("growth_stage"))
+            self.assertTrue(data.get("growth_stage") in ["Data unavailable", "Growth stage unavailable"] or "Satellite data" in data.get("growth_stage"))
             self.assertIsNone(data.get("ndvi"))
             self.assertIsNone(data.get("evi"))
 

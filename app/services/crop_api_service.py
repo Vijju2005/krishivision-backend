@@ -316,7 +316,13 @@ SYNONYMS = {
     "black pepper": "Black Pepper",
     "arcanut (processed)": "Arecanut",
     "atcanut (raw)": "Arecanut",
-    "arecanut": "Arecanut"
+    "arecanut": "Arecanut",
+    "rapeseed &mustard": "Rapeseed & Mustard",
+    "rapeseed & mustard": "Rapeseed & Mustard",
+    "rapeseed": "Rapeseed & Mustard",
+    "mustard": "Rapeseed & Mustard",
+    "soyabean": "Soybean",
+    "soybean": "Soybean"
 }
 
 def normalize_crop_name_synonym(c_name: str) -> str:
@@ -325,8 +331,21 @@ def normalize_crop_name_synonym(c_name: str) -> str:
     cleaned = c_name.strip().lower()
     if cleaned in SYNONYMS:
         return SYNONYMS[cleaned]
-    words = c_name.strip().split()
-    return " ".join(w.capitalize() for w in words)
+        
+    import re
+    formatted = re.sub(r'\s*&\s*', ' & ', c_name.strip())
+    formatted = re.sub(r'\s*/\s*', ' / ', formatted)
+    
+    words = formatted.split()
+    clean_words = []
+    for w in words:
+        if w in ["&", "/"]:
+            clean_words.append(w)
+        elif len(w) > 1 and w.startswith("&"):
+            clean_words.append("& " + w[1:].capitalize())
+        else:
+            clean_words.append(w.capitalize())
+    return " ".join(clean_words)
 
 
 import threading
@@ -444,15 +463,20 @@ def fetch_district_crops_from_api(
 
                 filtered_crops.append({
                     "id": crop_id,
+                    "crop": data["crop_name"],
                     "name": data["crop_name"],
                     "crop_name": data["crop_name"],
                     "season": ", ".join(sorted(list(data["seasons"]))) if data["seasons"] else "Year-round",
                     "growing_season": ", ".join(sorted(list(data["seasons"]))) if data["seasons"] else "Year-round",
+                    "crop_year": max_year,
                     "year": str(max_year),
                     "importance": "Major Crop",
                     "category": category,
                     "area_hectares": round(area_h, 2),
                     "area_acres": round(area_a, 2),
+                    "cultivated_area_acres": round(area_a, 2),
+                    "area_scope": "crop_in_district",
+                    "source": "APY Dataset",
                     "production_tonnes": round(prod_t, 2) if prod_t > 0 else 0.0,
                     "yield_kg_per_hectare": round(yield_val, 2),
                     "area_percentage": round(percentage, 2)
@@ -467,11 +491,20 @@ def fetch_district_crops_from_api(
                     detail="No government crop data is available for this district."
                 )
 
+            from ..routers.dashboard_map import get_district_monitored_area_acres
+            monitored_acres = get_district_monitored_area_acres(db, state, district)
+
             print(f"[Crop API] Final result: {len(filtered_crops)} crops returned from local APY")
             return {
                 "status": "success",
                 "state": state.strip().title(),
                 "district": district.strip().title(),
+                "monitored_area_acres": monitored_acres,
+                "monitored_area_label": "Total APY Crop Area Reported",
+                "monitored_area_source": "APY Dataset (Gross Cropped Area)",
+                "monitored_area_scope": "district_total_crop_area",
+                "crop_year": max_year,
+                "area_scope": "district",
                 "source": "APY Dataset",
                 "crops": filtered_crops
             }

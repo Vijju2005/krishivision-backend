@@ -1065,6 +1065,7 @@ def generate_pdf_report(
     if db_crop:
         from .agromonitoring_service import calculate_crop_satellite_analysis
         analysis_res = calculate_crop_satellite_analysis(db_session, db_crop)
+        satellite_available = analysis_res.get("satellite_available", False)
         health_status = analysis_res["health_status"]
         growth_stage = analysis_res["growth_stage"]
         est_harvest_days = analysis_res["est_harvest_days"]
@@ -1076,7 +1077,7 @@ def generate_pdf_report(
         satellite_status = analysis_res["satellite_status"]
         cloud_cover_val = analysis_res.get("cloud_cover")
         resolution_val = analysis_res.get("resolution")
-        has_no_satellite = (ndvi_val is None or ndvi_val <= 0.0) or ("unavailable" in health_status.lower() or "failed" in health_status.lower() or "error" in health_status.lower())
+        has_no_satellite = not satellite_available
     else:
         # Static fallback if no db_session
         has_no_satellite = (ndvi_val is None or ndvi_val <= 0.0) or ("unavailable" in health_status.lower())

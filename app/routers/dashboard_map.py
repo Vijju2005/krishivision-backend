@@ -195,7 +195,10 @@ def clean_string(s: str) -> str:
 def normalize_state_name(state: str) -> str:
     if not state:
         return ""
-    val = re.sub(r'\s+', ' ', state.strip().lower())
+    val = state.strip().lower()
+    if val.endswith(" state"):
+        val = val[:-6].strip()
+    val = re.sub(r'\s+', ' ', val)
     return STATE_NAME_MAPPINGS.get(val, val)
 
 def normalize_district_name(district: str) -> str:
@@ -298,22 +301,74 @@ def normalize_apy_crop_name(crop_name: str) -> str:
         return ""
     c = crop_name.strip().lower()
     
+    c_clean = re.sub(r'\s*&\s*', ' & ', c)
+    c_clean = re.sub(r'\s*/\s*', ' / ', c_clean)
+    
     # Mappings
-    if c in ["paddy", "rice"]:
+    if c_clean in ["paddy", "rice", "paddy / rice"]:
         return "Paddy / Rice"
-    elif c in ["cotton(lint)", "cotton"]:
+    elif c_clean in ["cotton(lint)", "cotton"]:
         return "Cotton"
-    elif c in ["mung(green gram)", "moong(green gram)", "green gram"]:
+    elif c_clean in ["mung(green gram)", "moong(green gram)", "green gram"]:
         return "Green Gram"
-    elif c in ["arhar/tur"]:
+    elif c_clean in ["arhar/tur", "arhar", "tur", "arhar / tur"]:
         return "Arhar / Tur"
-    elif c in ["black pepper"]:
+    elif c_clean in ["black pepper"]:
         return "Black Pepper"
-    elif c in ["arcanut (processed)", "atcanut (raw)", "arecanut"]:
+    elif c_clean in ["arcanut (processed)", "atcanut (raw)", "arecanut"]:
         return "Arecanut"
+    elif c_clean in ["soybean", "soyabean"]:
+        return "Soybean"
+    elif "rapeseed" in c_clean or "mustard" in c_clean:
+        return "Rapeseed & Mustard"
         
-    # Title Case
-    return " ".join(w.capitalize() for w in crop_name.strip().split())
+    formatted = re.sub(r'\s*&\s*', ' & ', crop_name.strip())
+    formatted = re.sub(r'\s*/\s*', ' / ', formatted)
+    
+    words = formatted.split()
+    clean_words = []
+    for w in words:
+        if w in ["&", "/"]:
+            clean_words.append(w)
+        elif len(w) > 1 and w.startswith("&"):
+            clean_words.append("& " + w[1:].capitalize())
+        else:
+            clean_words.append(w.capitalize())
+    return " ".join(clean_words)
+
+
+def get_district_monitored_area_acres(db: Session, state_name: str, district_name: str) -> float:
+    if not state_name or not district_name:
+        return 256780.0
+    norm_state = normalize_state_name(state_name)
+    norm_district = resolve_canonical_district(db, state_name, district_name)
+    
+    max_year = db.query(func.max(APYCropStatistic.crop_year)).filter(
+        func.lower(APYCropStatistic.state_name) == func.lower(norm_state),
+        func.lower(APYCropStatistic.district_name) == func.lower(norm_district)
+    ).scalar()
+    
+    if max_year:
+        total_ha = db.query(func.sum(APYCropStatistic.area_hectares)).filter(
+            func.lower(APYCropStatistic.state_name) == func.lower(norm_state),
+            func.lower(APYCropStatistic.district_name) == func.lower(norm_district),
+            APYCropStatistic.crop_year == max_year
+        ).scalar()
+        if total_ha and total_ha > 0:
+            acres = round(total_ha * 2.47105, 2)
+            db_district = get_district_by_name(db, state_name, district_name)
+            if db_district and (db_district.monitored_area_acres is None or abs(db_district.monitored_area_acres - acres) > 0.01):
+                db_district.monitored_area_acres = acres
+                try:
+                    db.commit()
+                except Exception:
+                    db.rollback()
+            return acres
+            
+    db_district = get_district_by_name(db, state_name, district_name)
+    if db_district and db_district.monitored_area_acres and db_district.monitored_area_acres > 0:
+        return db_district.monitored_area_acres
+    return 256780.0
 
 
 def override_crop_with_apy_stats_if_needed(db: Session, crop: Crop) -> Crop:
@@ -337,6 +392,8 @@ def override_crop_with_apy_stats_if_needed(db: Session, crop: Crop) -> Crop:
         search_names.extend(["arhar/tur", "arhar", "tur", "arhar / tur"])
     elif norm_c == "arecanut":
         search_names.extend(["arecanut", "arcanut (processed)", "atcanut (raw)"])
+    elif norm_c in ["soybean", "soyabean"]:
+        search_names.extend(["soybean", "soyabean"])
         
     # Query aggregated APY stats for this crop name and district
     max_year = db.query(func.max(APYCropStatistic.crop_year)).filter(
@@ -355,26 +412,22 @@ def override_crop_with_apy_stats_if_needed(db: Session, crop: Crop) -> Crop:
         apy_recs = db.query(APYCropStatistic).filter(
             func.lower(APYCropStatistic.state_name) == func.lower(norm_state),
             func.lower(APYCropStatistic.district_name) == func.lower(norm_district),
-            APYCropStatistic.crop_year == max_year
+            APYCropStatistic.crop_year == max_year,
+            func.lower(APYCropStatistic.crop_name).in_(search_names)
         ).all()
         
-        matching_recs = []
-        for r in apy_recs:
-            if r.crop_name and normalize_apy_crop_name(r.crop_name).lower() == norm_c:
-                matching_recs.append(r)
-                
-        if matching_recs:
-            area_h = sum(r.area_hectares for r in matching_recs if r.area_hectares)
-            prod_t = sum(r.production_tonnes for r in matching_recs if r.production_tonnes)
-            seasons = sorted(list(set(r.season.strip() for r in matching_recs if r.season)))
+        if apy_recs:
+            area_h = sum(r.area_hectares for r in apy_recs if r.area_hectares)
+            prod_t = sum(r.production_tonnes for r in apy_recs if r.production_tonnes)
+            seasons = sorted(list(set(r.season.strip() for r in apy_recs if r.season)))
             
             yield_val = 0.0
             if area_h > 0:
                 yield_val = (prod_t * 1000.0) / area_h
                 
-            crop.area_acres = area_h * 2.47105
-            crop.production_tonnes = prod_t
-            crop.yield_hg_ha = yield_val * 10.0 # Yield in hg/ha is 10 times kg/ha
+            crop.area_acres = round(area_h * 2.47105, 2)
+            crop.production_tonnes = round(prod_t, 2)
+            crop.yield_hg_ha = round(yield_val * 10.0, 2) # Yield in hg/ha is 10 times kg/ha
             crop.source_year = max_year
             crop.growing_season = ", ".join(seasons) if seasons else "Unknown"
             crop.source = "APY Dataset"
@@ -392,6 +445,78 @@ def get_current_user_optional(
     if not payload:
         return None
     return db.query(User).filter(User.id == int(payload["sub"])).first()
+
+
+def get_search_crop_names(crop_name: str) -> list[str]:
+    if not crop_name:
+        return []
+    c = crop_name.strip().lower()
+    names = [c]
+    if 'rice' in c or 'paddy' in c:
+        names.extend(['rice', 'paddy', 'paddy / rice', 'rice / paddy'])
+    elif 'rapeseed' in c or 'mustard' in c:
+        names.extend(['rapeseed &mustard', 'rapeseed & mustard', 'rapeseed', 'mustard'])
+    elif 'green gram' in c or 'moong' in c or 'mung' in c:
+        names.extend(['moong(green gram)', 'mung(green gram)', 'green gram'])
+    elif 'arhar' in c or 'tur' in c:
+        names.extend(['arhar/tur', 'arhar', 'tur', 'arhar / tur'])
+    elif 'soybean' in c or 'soyabean' in c:
+        names.extend(['soybean', 'soyabean'])
+    elif 'cotton' in c:
+        names.extend(['cotton(lint)', 'cotton'])
+    elif 'arecanut' in c:
+        names.extend(['arecanut', 'arcanut (processed)', 'atcanut (raw)'])
+    return list(set(names))
+
+
+def get_resolved_analysis_area(db: Session, a: Analysis) -> float:
+    if a.area_acres and a.area_acres > 0.0:
+        return a.area_acres
+
+    crop_name = a.crop_name or a.crop or ""
+    parts = a.district.split(",") if a.district else []
+    dist_name = parts[0].strip() if len(parts) > 0 else ""
+    state_pref = parts[1].strip() if len(parts) > 1 else ""
+
+    if crop_name and dist_name:
+        norm_state = normalize_state_name(state_pref)
+        norm_district = resolve_canonical_district(db, state_pref, dist_name)
+        search_names = get_search_crop_names(crop_name)
+        
+        max_year = db.query(func.max(APYCropStatistic.crop_year)).filter(
+            func.lower(APYCropStatistic.state_name) == func.lower(norm_state),
+            func.lower(APYCropStatistic.district_name) == func.lower(norm_district),
+            func.lower(APYCropStatistic.crop_name).in_([n.lower() for n in search_names])
+        ).scalar()
+        
+        if not max_year:
+            max_year = db.query(func.max(APYCropStatistic.crop_year)).filter(
+                func.lower(APYCropStatistic.district_name) == func.lower(norm_district),
+                func.lower(APYCropStatistic.crop_name).in_([n.lower() for n in search_names])
+            ).scalar()
+            
+        if max_year:
+            total_ha = db.query(func.sum(APYCropStatistic.area_hectares)).filter(
+                func.lower(APYCropStatistic.district_name) == func.lower(norm_district),
+                func.lower(APYCropStatistic.crop_name).in_([n.lower() for n in search_names]),
+                APYCropStatistic.crop_year == max_year
+            ).scalar()
+            if total_ha and total_ha > 0:
+                area_acres = round(total_ha * 2.47105, 2)
+                a.area_acres = area_acres
+                db.commit()
+                return area_acres
+
+        c_rec = db.query(Crop).join(District).filter(
+            func.lower(District.name) == func.lower(norm_district),
+            Crop.area_acres > 0.0
+        ).first()
+        if c_rec and c_rec.area_acres:
+            a.area_acres = c_rec.area_acres
+            db.commit()
+            return c_rec.area_acres
+
+    return 0.0
 
 
 @router.get("/dashboard/summary")
@@ -417,31 +542,31 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
     upcoming_harvest = 0
 
     for a in analyses:
-        area_val = a.area_acres or 0.0
+        area_val = get_resolved_analysis_area(db, a)
         total_area += area_val
 
         crop_name = a.crop or a.crop_name
         if crop_name:
             unique_crops.add(crop_name.strip())
 
-        # Determine health status dynamically from either health_status string or avg_ndvi
+        # Determine health status dynamically from health_status string
         health = (a.health_status or "").strip().lower()
-        if "healthy" in health or "good" in health:
+        if "satellite data unavailable" in health or "unavailable" in health or "no satellite" in health:
+            # Satellite data unavailable -> do NOT classify as Healthy or At Risk (Requirement 3 & 5)
+            pass
+        elif "healthy" in health or "good" in health:
             healthy_area += area_val
         elif "risk" in health or "unhealthy" in health or "poor" in health or "moderate" in health or "mod" in health:
             risk_area += area_val
         else:
-            # Fallback based on avg_ndvi for generic status like "Major crops reported..."
-            # Threshold of 0.55
             if a.avg_ndvi is not None and a.avg_ndvi >= 0.55:
                 healthy_area += area_val
-            else:
+            elif a.avg_ndvi is not None:
                 risk_area += area_val
 
         # Estimate remaining days to harvest if harvest_in_days is None or invalid
         days_to_harvest = a.harvest_in_days
         if days_to_harvest is None or days_to_harvest < 0:
-            # Estimate from growth stage
             stage = (a.growth_stage or "").lower()
             if "germination" in stage or "planting" in stage:
                 days_to_harvest = 90
@@ -454,9 +579,8 @@ def get_dashboard_summary(db: Session = Depends(get_db), current_user: User = De
             elif "harvest" in stage:
                 days_to_harvest = 0
             else:
-                days_to_harvest = 45  # Default fallback
+                days_to_harvest = 45
 
-        # Counts as upcoming harvest if remaining days is between 0 and 50
         if days_to_harvest is not None and 0 <= days_to_harvest <= 50:
             upcoming_harvest += 1
 
@@ -493,17 +617,20 @@ def get_dashboard_alerts(db: Session = Depends(get_db), current_user: User = Dep
             
         state_name = district_obj.state.name if (district_obj and district_obj.state) else (state_pref or "Karnataka")
         
-        crop_name = a.crop or "Unknown Crop"
+        crop_name = a.crop or a.crop_name or "Unknown Crop"
         health = a.health_status or "Healthy"
-        area_val = a.area_acres or 0.0
+        area_val = get_resolved_analysis_area(db, a)
         
-        try:
-            area_str = f"{int(area_val):,}"
-        except Exception:
-            area_str = f"{area_val}"
+        if area_val and area_val > 0.0:
+            try:
+                area_str = f"{int(round(area_val)):,} acres"
+            except Exception:
+                area_str = f"{area_val} acres"
+        else:
+            area_str = "Area unavailable"
             
         title = f"{crop_name} — {dist_name}, {state_name}"
-        message = f"Health: {health}\nArea: {area_str} acres"
+        message = f"Health: {health}\nArea: {area_str}"
         
         alerts.append({
             "id": a.id,
@@ -587,6 +714,10 @@ def get_districts(state_id: int, db: Session = Depends(get_db)):
     
     res = []
     for d in districts:
+        state_name = d.state.name if d.state else "Karnataka"
+        monitored_acres = get_district_monitored_area_acres(db, state_name, d.name)
+        d.monitored_area_acres = monitored_acres
+        
         crop = db.query(Crop).filter(Crop.district_id == d.id).first()
         health_status = "Satellite data unavailable"
         if crop:
@@ -598,8 +729,15 @@ def get_districts(state_id: int, db: Session = Depends(get_db)):
         res.append({
             "id": d.id,
             "state_id": d.state_id,
+            "state_name": state_name,
+            "district": d.name,
             "name": d.name,
-            "monitored_area": d.monitored_area_acres,
+            "monitored_area": monitored_acres,
+            "monitored_area_acres": monitored_acres,
+            "monitored_area_label": "Total APY Crop Area Reported",
+            "monitored_area_source": "APY Dataset (Gross Cropped Area)",
+            "monitored_area_scope": "district_total_crop_area",
+            "area_scope": "district",
             "boundary": d.boundary_geojson,
             "health_status": health_status
         })
@@ -622,12 +760,22 @@ def get_district_details(district_id: int, db: Session = Depends(get_db)):
     district = db.query(District).filter(District.id == district_id).first()
     if not district:
         raise HTTPException(status_code=404, detail="District not found")
+    state_name = district.state.name if district.state else "Karnataka"
+    monitored_acres = get_district_monitored_area_acres(db, state_name, district.name)
+    district.monitored_area_acres = monitored_acres
     return {
         "id": district.id,
         "state_id": district.state_id,
-        "state_name": district.state.name if district.state else "Karnataka",
+        "state_name": state_name,
+        "state": state_name,
+        "district": district.name,
         "name": district.name,
-        "monitored_area": district.monitored_area_acres,
+        "monitored_area": monitored_acres,
+        "monitored_area_acres": monitored_acres,
+        "monitored_area_label": "Total APY Crop Area Reported",
+        "monitored_area_source": "APY Dataset (Gross Cropped Area)",
+        "monitored_area_scope": "district_total_crop_area",
+        "area_scope": "district",
         "boundary": district.boundary_geojson
     }
 
@@ -1030,6 +1178,8 @@ def get_crop(crop_id: int, db: Session = Depends(get_db), current_user: User = D
         "source_year": crop.source_year,
         "importance": crop.importance,
         "area_acres": crop.area_acres,
+        "cultivated_area_acres": crop.area_acres,
+        "area_scope": "crop_in_district",
         "production_tonnes": crop.production_tonnes,
         "yield_hg_ha": crop.yield_hg_ha,
         "crop_percentage": crop.crop_percentage,
@@ -1194,6 +1344,8 @@ def get_crop_overview_growth_health(crop_id: int, db: Session = Depends(get_db),
             "state_name": crop.district.state.name if (crop.district and crop.district.state) else "Karnataka",
             "source": "KrishiVision Satellite/ML" if user_analysis else (crop.source or "Government of India – data.gov.in"),
             "area_acres": crop.area_acres,
+            "cultivated_area_acres": crop.area_acres,
+            "area_scope": "crop_in_district",
             "health_index": analysis_res["health_index"],
             "health_status": analysis_res["health_status"],
             "growth_stage": analysis_res["growth_stage"],
@@ -1400,6 +1552,7 @@ def get_crop_report_pdf(
     crop = db.query(Crop).filter(Crop.id == crop_id).first()
     if not crop:
         raise HTTPException(status_code=404, detail="Crop not found")
+    crop = override_crop_with_apy_stats_if_needed(db, crop)
         
     lang_names = {
         "en": "English",
@@ -1700,6 +1853,8 @@ def get_apy_crops(state: str, district: str, db: Session = Depends(get_db)):
                 "name": name,
                 "area_hectares": round(area_h, 2),
                 "area_acres": round(area_a, 2),
+                "cultivated_area_acres": round(area_a, 2),
+                "area_scope": "crop_in_district",
                 "production_tonnes": round(prod_t, 2) if prod_t > 0 else 0.0,
                 "yield_kg_per_hectare": round(yield_val, 2),
                 "crop_percentage": round(percentage, 2),
@@ -1712,11 +1867,14 @@ def get_apy_crops(state: str, district: str, db: Session = Depends(get_db)):
         filtered = [c for c in crops_list if c["crop_percentage"] >= relevance_threshold]
         filtered.sort(key=lambda x: x["area_acres"], reverse=True)
         
+        monitored_acres = get_district_monitored_area_acres(db, state, district)
         return {
             "state": state.title(),
             "district": district.title(),
             "latest_year": max_year,
             "crop_year": max_year,
+            "monitored_area_acres": monitored_acres,
+            "area_scope": "district",
             "source": "APY Dataset",
             "status": "success",
             "crops": filtered
@@ -1752,7 +1910,7 @@ def get_apy_crop_detail(state: str, district: str, crop: str, db: Session = Depe
         if not r.crop_name:
             continue
         norm_name = normalize_apy_crop_name(r.crop_name)
-        if norm_name.lower() == target_crop:
+        if norm_name.lower() == target_crop or r.crop_name.lower() == target_crop:
             crop_records.append(r)
             
     if not crop_records:
@@ -1777,6 +1935,8 @@ def get_apy_crop_detail(state: str, district: str, crop: str, db: Session = Depe
         "season": ", ".join(seasons) if seasons else "Unknown",
         "area_hectares": round(area_h, 2),
         "area_acres": round(area_a, 2),
+        "cultivated_area_acres": round(area_a, 2),
+        "area_scope": "crop_in_district",
         "production": round(prod_t, 2) if prod_t > 0 else 0.0,
         "yield": round(yield_val, 2),
         "source": "APY Dataset"
