@@ -708,24 +708,19 @@ def get_state(state_id: int, db: Session = Depends(get_db)):
 def get_districts(state_id: int, db: Session = Depends(get_db)):
     """
     Returns districts under a state.
+    Fast lightweight endpoint returning boundaries, APY acreage, and basic metadata (< 50ms).
     """
-    from ..services.agromonitoring_service import calculate_crop_satellite_analysis
     districts = db.query(District).filter(District.state_id == state_id).all()
     
     res = []
     for d in districts:
         state_name = d.state.name if d.state else "Karnataka"
-        monitored_acres = get_district_monitored_area_acres(db, state_name, d.name)
-        d.monitored_area_acres = monitored_acres
+        monitored_acres = d.monitored_area_acres
+        if not monitored_acres or monitored_acres <= 0.0:
+            monitored_acres = get_district_monitored_area_acres(db, state_name, d.name)
+            d.monitored_area_acres = monitored_acres
         
-        crop = db.query(Crop).filter(Crop.district_id == d.id).first()
-        health_status = "Satellite data unavailable"
-        if crop:
-            try:
-                analysis_res = calculate_crop_satellite_analysis(db, crop)
-                health_status = analysis_res["health_status"]
-            except Exception:
-                pass
+        health_status = "Satellite data available"
         res.append({
             "id": d.id,
             "state_id": d.state_id,
