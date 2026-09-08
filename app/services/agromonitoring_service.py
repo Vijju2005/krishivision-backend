@@ -302,20 +302,92 @@ def make_agromonitoring_request(url: str, method: str = "GET", data_dict: dict =
         logger.error(f"[AgroMonitoring Connection Error] Time: {elapsed:.4f}s, Error: {err_msg}")
         raise HTTPException(status_code=503, detail="Satellite service temporarily unavailable")
 
+def clean_string(s: str) -> str:
+    if not s:
+        return ""
+    import re
+    s = s.lower().strip()
+    s = s.replace(" district", "").replace(" islands", "").replace(" island", "")
+    return re.sub(r'[^a-z0-9]', '', s)
+
+def get_district_obj(db: Session, state: str, district: str) -> District | None:
+    if not district:
+        return None
+    from sqlalchemy import func
+    from ..models.orm_models import State, District
+    
+    norm_state = normalize_state_name(state)
+    norm_district = normalize_district_name(district)
+    
+    # 1. Direct query by exact or lower name matching
+    d_obj = db.query(District).filter(
+        func.lower(District.name).in_([district.strip().lower(), norm_district.strip().lower()])
+    ).first()
+    if d_obj:
+        return d_obj
+        
+    # 2. Match via State filter
+    state_obj = db.query(State).filter(
+        func.lower(State.name).in_([state.strip().lower(), norm_state.strip().lower()])
+    ).first()
+    
+    if not state_obj:
+        states = db.query(State).all()
+        clean_st = clean_string(norm_state)
+        for s in states:
+            if clean_string(s.name) == clean_st:
+                state_obj = s
+                break
+                
+    if state_obj:
+        districts = db.query(District).filter(District.state_id == state_obj.id).all()
+        clean_req = clean_string(district)
+        clean_norm = clean_string(norm_district)
+        for d in districts:
+            cd = clean_string(d.name)
+            if cd == clean_req or cd == clean_norm:
+                return d
+                
+        import difflib
+        best_d = None
+        best_score = 0.0
+        for d in districts:
+            cd = clean_string(d.name)
+            score = max(
+                difflib.SequenceMatcher(None, clean_req, cd).ratio(),
+                difflib.SequenceMatcher(None, clean_norm, cd).ratio()
+            )
+            if score > best_score:
+                best_score = score
+                best_d = d
+        if best_score >= 0.7:
+            return best_d
+            
+    return db.query(District).filter(
+        func.lower(District.name) == func.lower(district.strip())
+    ).first()
+
 def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> str:
+    from sqlalchemy import func
+    from ..models.orm_models import CropMaster
+    
+    district_obj = get_district_obj(db, state, district)
+    district_db_name = district_obj.name if district_obj else district.strip().title()
+    state_db_name = district_obj.state.name if (district_obj and district_obj.state) else (state.strip().title() if state else "Karnataka")
+    
     norm_state = normalize_state_name(state).title()
     norm_district = normalize_district_name(district).title()
     norm_crop = crop.strip().title()
     
-    # 1. Look up in local db mapping for the exact crop
+    # 1. Look up in local db mapping for the exact crop across possible district name variations
     poly_record = db.query(AgroMonitoringPolygon).filter(
-        AgroMonitoringPolygon.state == norm_state,
-        AgroMonitoringPolygon.district == norm_district,
+        AgroMonitoringPolygon.state.in_([norm_state, state_db_name]),
+        AgroMonitoringPolygon.district.in_([norm_district, district_db_name, district.strip().title()]),
         AgroMonitoringPolygon.crop == norm_crop
     ).first()
     
     if poly_record:
-        logger.info(f"[AgroMonitoring Match] Found local polygon ID mapping for {norm_state} -> {norm_district} -> {norm_crop}: {poly_record.polygon_id}")
+        logger.info(f"[AgroMonitoring Match] Found local polygon ID mapping for {state_db_name} -> {district_db_name} -> {norm_crop}: {poly_record.polygon_id}")
         return poly_record.polygon_id
     
     # 2. Key not configured verification
@@ -323,7 +395,7 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
     if not api_key:
         raise HTTPException(status_code=503, detail="AgroMonitoring API key is not configured")
 
-    # 3. Query the API for all registered polygons to check for matches by district and crop name (strict)
+    # 3. Query the API for all registered polygons to check for matches by district and crop name
     api_polys = []
     try:
         list_url = f"https://api.agromonitoring.com/agro/1.0/polygons?appid={api_key}"
@@ -332,17 +404,18 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
         logger.warning(f"[AgroMonitoring API] Failed to fetch registered polygons list: {e}")
 
     if api_polys and isinstance(api_polys, list):
+        district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
         for poly in api_polys:
             name = poly.get("name", "").lower()
-            if norm_district.lower() in name and norm_crop.lower() in name:
+            if any(term in name for term in district_search_terms) and norm_crop.lower() in name:
                 polygon_id = poly.get("id")
                 if polygon_id:
                     # Cache in local DB
                     existing_poly = db.query(AgroMonitoringPolygon).filter(AgroMonitoringPolygon.polygon_id == polygon_id).first()
                     if not existing_poly:
                         new_poly = AgroMonitoringPolygon(
-                            state=norm_state,
-                            district=norm_district,
+                            state=state_db_name,
+                            district=district_db_name,
                             crop=norm_crop,
                             polygon_id=polygon_id,
                             geojson=poly.get("geo_json") or {}
@@ -352,18 +425,42 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
                         db.refresh(new_poly)
                     return polygon_id
 
-    # 4. Retrieve GeoJSON from Crop database to create new polygon (ONLY if crop has crop-specific geometry)
+    # 4. Retrieve GeoJSON from Crop database or District boundary fallback
     boundary = None
-    crop_rec = db.query(Crop).filter(
-        Crop.district.has(name=norm_district),
-        Crop.crop_master.has(name=norm_crop)
-    ).first()
-    
-    if crop_rec and crop_rec.boundary_geojson:
-        boundary = crop_rec.boundary_geojson
+    analysis_scope = "field"
+
+    if district_obj:
+        # Search crop field geometry
+        search_crop_names = [norm_crop.lower(), crop.strip().lower()]
+        if "arhar" in crop.lower() or "tur" in crop.lower():
+            search_crop_names.extend(["arhar / tur", "arhar/tur", "arhar", "tur", "pigeon pea"])
+        elif "soy" in crop.lower():
+            search_crop_names.extend(["soybean", "soyabean"])
+        elif "mustard" in crop.lower() or "rapeseed" in crop.lower():
+            search_crop_names.extend(["rapeseed & mustard", "rapeseed &mustard", "mustard"])
+
+        crop_rec = db.query(Crop).filter(
+            Crop.district_id == district_obj.id,
+            Crop.crop_master.has(func.lower(CropMaster.name).in_(search_crop_names))
+        ).first()
+
+        if crop_rec and crop_rec.boundary_geojson:
+            boundary = crop_rec.boundary_geojson
+            analysis_scope = "field"
+
+    # Fallback to District Boundary Geometry if field geometry is unavailable
+    if not boundary and district_obj and district_obj.boundary_geojson:
+        boundary = district_obj.boundary_geojson
+        analysis_scope = "district"
 
     if not boundary:
-        raise HTTPException(status_code=404, detail=f"No field geometry available for {norm_crop} in {norm_district}")
+        # Fallback to State boundary geometry if district boundary is also missing
+        if district_obj and district_obj.state and district_obj.state.boundary_geojson:
+            boundary = district_obj.state.boundary_geojson
+            analysis_scope = "district"
+
+    if not boundary:
+        raise HTTPException(status_code=404, detail=f"No geometry available for {norm_crop} in {district_db_name}")
 
     # Create new polygon coordinates if we have a boundary
     try:
@@ -381,14 +478,14 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
             ]
             geojson = {
                 "type": "Feature",
-                "properties": {},
+                "properties": {"analysis_scope": analysis_scope},
                 "geometry": {
                     "type": "Polygon",
                     "coordinates": [coords]
                 }
             }
             
-            poly_name = f"{norm_state}_{norm_district}_{norm_crop}".replace(" ", "_")
+            poly_name = f"{state_db_name}_{district_db_name}_{norm_crop}".replace(" ", "_")
             post_data = {
                 "name": poly_name,
                 "geo_json": geojson
@@ -400,8 +497,8 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
             polygon_id = response.get("id")
             if polygon_id:
                 new_poly = AgroMonitoringPolygon(
-                    state=norm_state,
-                    district=norm_district,
+                    state=state_db_name,
+                    district=district_db_name,
                     crop=norm_crop,
                     polygon_id=polygon_id,
                     geojson=geojson
@@ -409,7 +506,7 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
                 db.add(new_poly)
                 db.commit()
                 db.refresh(new_poly)
-                logger.info(f"[AgroMonitoring Created] Created new polygon {polygon_id} for {norm_state} -> {norm_district} -> {norm_crop}")
+                logger.info(f"[AgroMonitoring Created] Created new polygon {polygon_id} (scope={analysis_scope}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
                 return polygon_id
     except HTTPException as he:
         logger.error(f"[AgroMonitoring Create Failed] HTTP {he.status_code}: {he.detail}")
@@ -491,7 +588,7 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
 
     api_key = get_agromonitoring_api_key()
 
-    # 3. Search satellite scenes for the last 30 days using HTTPS
+    # 3. Search satellite scenes for the last 30 to 90 days using HTTPS
     now_ts = int(time.time()) - 300
     thirty_days_ago_ts = now_ts - (30 * 24 * 60 * 60)
     
@@ -500,7 +597,13 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
     scene_search_success = "FAILED"
     try:
         scenes = make_agromonitoring_request(search_url)
-        scene_search_success = "SUCCESS" if scenes else "FAILED"
+        if not scenes or not isinstance(scenes, list) or len(scenes) == 0:
+            # Fallback to 90 days historical search window
+            ninety_days_ago_ts = now_ts - (90 * 24 * 60 * 60)
+            search_url_90 = f"https://api.agromonitoring.com/agro/1.0/image/search?start={ninety_days_ago_ts}&end={now_ts}&polyid={polygon_id}&appid={api_key}"
+            scenes = make_agromonitoring_request(search_url_90)
+            
+        scene_search_success = "SUCCESS" if (scenes and isinstance(scenes, list) and len(scenes) > 0) else "FAILED"
     except HTTPException as he:
         if he.status_code in [401, 403] or "authentication" in str(he.detail).lower():
             polygon_auth_success = "FAILED"
@@ -524,7 +627,7 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
         logger.info("NDWI: UNAVAILABLE")
         raise e
     
-    if not scenes or not isinstance(scenes, list):
+    if not scenes or not isinstance(scenes, list) or len(scenes) == 0:
         logger.info("Satellite provider: AgroMonitoring")
         logger.info(f"Authentication: {polygon_auth_success}")
         logger.info("Scene search: FAILED")
@@ -535,8 +638,13 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
         logger.info("NDWI: UNAVAILABLE")
         raise HTTPException(status_code=404, detail="Satellite data unavailable")
 
-    # Take the latest scene
-    latest_scene = scenes[-1]
+    # Pick latest scene with low cloud cover if available
+    low_cloud_scenes = [s for s in scenes if isinstance(s, dict) and s.get("cl", 100) <= 40]
+    if low_cloud_scenes:
+        latest_scene = low_cloud_scenes[-1]
+    else:
+        latest_scene = scenes[-1]
+
     dt = latest_scene.get("dt")
     images = latest_scene.get("image", {})
     truecolor = images.get("truecolor")
@@ -740,12 +848,20 @@ def classify_crop_health_score(ndvi: float | None, evi: float | None = None, ndw
 
 
 CROP_PHENOLOGY_DEFAULTS = {
+    "arhar / tur": {"duration": 180, "stages": ["Planting", "Germination", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
+    "arhar": {"duration": 180, "stages": ["Planting", "Germination", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
+    "tur": {"duration": 180, "stages": ["Planting", "Germination", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
+    "pigeon pea": {"duration": 180, "stages": ["Planting", "Germination", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
     "cotton": {"duration": 180, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
     "wheat": {"duration": 120, "stages": ["Planting", "Vegetative Growth", "Tillering", "Maturity", "Harvest"], "sow_months": [10, 11, 12]},
     "soybean": {"duration": 100, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
+    "soyabean": {"duration": 100, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7]},
     "maize": {"duration": 110, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [6, 7, 10, 11]},
     "paddy": {"duration": 130, "stages": ["Planting", "Vegetative Growth", "Tillering", "Maturity", "Harvest"], "sow_months": [6, 7, 11, 12]},
     "rice": {"duration": 130, "stages": ["Planting", "Vegetative Growth", "Tillering", "Maturity", "Harvest"], "sow_months": [6, 7, 11, 12]},
+    "potato": {"duration": 100, "stages": ["Planting", "Germination", "Vegetative Growth", "Tuber Initiation", "Maturity", "Harvest"], "sow_months": [10, 11]},
+    "mustard": {"duration": 110, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [10, 11]},
+    "rapeseed & mustard": {"duration": 110, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [10, 11]},
     "coffee": {"duration": 270, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [5, 6]},
     "black pepper": {"duration": 240, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [5, 6]},
     "khesari": {"duration": 120, "stages": ["Planting", "Vegetative Growth", "Flowering", "Maturity", "Harvest"], "sow_months": [10, 11]},
@@ -1014,7 +1130,18 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
             moisture_val = round(ndwi_val * 100.0, 2)
             
     temp_val = crop.temperature if crop.temperature and crop.temperature > 0.0 else None
-    
+    if temp_val is None and crop.district:
+        try:
+            flat_c = extract_flat_coordinates(crop.district.boundary_geojson or crop.boundary_geojson)
+            if flat_c:
+                c_lng, c_lat = calculate_centroid(flat_c)
+                from .weather_service import fetch_current_weather
+                w_data = fetch_current_weather(c_lat, c_lng)
+                if w_data and "temp" in w_data:
+                    temp_val = round(w_data["temp"], 1)
+        except Exception as we:
+            logger.warning(f"[Weather] Could not fetch district weather: {we}")
+
     return {
         "crop_id": crop.id,
         "crop_name": crop_name,
@@ -1047,8 +1174,8 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "confidence": confidence,
         "data_source": data_source,
         "moisture": moisture_val if has_real_satellite else None,
-        "temp": temp_val if has_real_satellite else None,
-        "temperature": temp_val if has_real_satellite else None,
+        "temp": temp_val,
+        "temperature": temp_val,
         "cloud_cover": cloud_cover if has_real_satellite else None,
         "resolution": resolution if has_real_satellite else None
     }
