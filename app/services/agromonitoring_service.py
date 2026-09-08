@@ -522,7 +522,19 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
     norm_district = normalize_district_name(district).title()
     norm_crop = crop.strip().title()
 
-    # 1. Check local cache (3 days threshold)
+    # 0. Purge any invalid/stale cache records that have null ndvi to ensure temporary errors are never cached
+    try:
+        db.query(SatelliteAnalysisCache).filter(
+            SatelliteAnalysisCache.state == norm_state,
+            SatelliteAnalysisCache.district == norm_district,
+            SatelliteAnalysisCache.crop == norm_crop,
+            SatelliteAnalysisCache.ndvi.is_(None)
+        ).delete()
+        db.commit()
+    except Exception:
+        db.rollback()
+
+    # 1. Check local cache (3 days threshold for valid satellite results)
     cache_record = db.query(SatelliteAnalysisCache).filter(
         SatelliteAnalysisCache.state == norm_state,
         SatelliteAnalysisCache.district == norm_district,
