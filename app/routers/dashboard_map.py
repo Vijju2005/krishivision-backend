@@ -1321,14 +1321,12 @@ def get_crop_overview_growth_health(
                 crop_obj = db.query(Crop).filter(Crop.id == c_id).first()
 
         if not crop_obj:
-            # Fallback for Arhar / Tur in Kalaburagi/Gulbarga
-            c_id = find_crop_id_for_apy(db, "Karnataka", "Kalaburagi", "Arhar / Tur")
-            if c_id:
-                crop_obj = db.query(Crop).filter(Crop.id == c_id).first()
-
-        if not crop_obj:
             return {
                 "status": "no_data",
+                "satellite_available": False,
+                "satellite_status": "SATELLITE DATA UNAVAILABLE",
+                "health_status": "Satellite data unavailable",
+                "growth_stage": "Growth stage unavailable",
                 "message": "Growth and health data is not available for this crop yet."
             }
 

@@ -557,11 +557,16 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
     except HTTPException as he:
         logger.error(f"[AgroMonitoring Create Failed] HTTP {he.status_code}: {he.detail}")
         if (he.status_code == 413 or "quota" in str(he.detail).lower()) and api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
-            fallback_poly = api_polys[0]
-            polygon_id = fallback_poly.get("id")
-            if polygon_id:
-                logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered polygon {polygon_id} ({fallback_poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
-                return polygon_id
+            district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
+            for poly in api_polys:
+                p_name = poly.get("name", "").lower()
+                if any(term in p_name for term in district_search_terms) and norm_crop.lower() in p_name:
+                    polygon_id = poly.get("id")
+                    if polygon_id:
+                        logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered matching polygon {polygon_id} ({poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
+                        return polygon_id
+            logger.warning(f"[AgroMonitoring Quota Exceeded] Cannot create polygon for {state_db_name} -> {district_db_name} -> {norm_crop} and no matching polygon exists.")
+            raise HTTPException(status_code=429, detail=f"Satellite polygon quota exceeded for {norm_crop} in {district_db_name}")
         raise he
     except Exception as e:
         logger.error(f"[AgroMonitoring Create Error] {e}")
