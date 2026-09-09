@@ -195,8 +195,10 @@ def normalize_district_name(district: str) -> str:
     return DISTRICT_NAME_MAPPINGS.get(val, val)
 
 def get_agromonitoring_api_key() -> str:
-    key = os.getenv("AGROMONITORING_API_KEY", "")
-    return key.strip()
+    key = os.getenv("AGROMONITORING_API_KEY", "").strip()
+    if not key or key.upper() in ["TEST_AGROMONITORING_KEY", "YOUR_AGROMONITORING_API_KEY", "YOUR_API_KEY", "PLACEHOLDER"]:
+        return ""
+    return key
 
 def extract_flat_coordinates(boundary_geojson) -> list:
     if not boundary_geojson:
@@ -310,6 +312,39 @@ def clean_string(s: str) -> str:
     s = s.replace(" district", "").replace(" islands", "").replace(" island", "")
     return re.sub(r'[^a-z0-9]', '', s)
 
+DISTRICT_NAME_ALIASES = {
+    "gulbarga": ["gulbarga", "kalaburagi"],
+    "kalaburagi": ["gulbarga", "kalaburagi"],
+    "belgaum": ["belgaum", "belagavi"],
+    "belagavi": ["belgaum", "belagavi"],
+    "mysore": ["mysore", "mysuru"],
+    "mysuru": ["mysore", "mysuru"],
+    "chikmagalur": ["chikmagalur", "chikkamagaluru"],
+    "chikkamagaluru": ["chikmagalur", "chikkamagaluru"],
+    "bangalore urban": ["bangalore urban", "bengaluru urban"],
+    "bengaluru urban": ["bangalore urban", "bengaluru urban"],
+    "bangalore rural": ["bangalore rural", "bengaluru rural"],
+    "bengaluru rural": ["bangalore rural", "bengaluru rural"],
+    "shimoga": ["shimoga", "shivamogga"],
+    "shivamogga": ["shimoga", "shivamogga"],
+    "tumkur": ["tumkur", "tumakuru"],
+    "tumakuru": ["tumkur", "tumakuru"],
+    "coorg": ["coorg", "kodagu"],
+    "kodagu": ["coorg", "kodagu"],
+    "bagalkot": ["bagalkot", "bagalkote"],
+    "bagalkote": ["bagalkot", "bagalkote"],
+    "chamrajnagar": ["chamrajnagar", "chamarajanagara"],
+    "chamarajanagara": ["chamrajnagar", "chamarajanagara"],
+    "davanagere": ["davanagere", "davangere"],
+    "davangere": ["davanagere", "davangere"],
+    "bijapur": ["bijapur", "vijayapura"],
+    "vijayapura": ["bijapur", "vijayapura"],
+    "bellary": ["bellary", "ballari"],
+    "ballari": ["bellary", "ballari"],
+    "yadgir": ["yadgir", "yadagiri"],
+    "yadagiri": ["yadgir", "yadagiri"],
+}
+
 def get_district_obj(db: Session, state: str, district: str) -> District | None:
     if not district:
         return None
@@ -318,10 +353,20 @@ def get_district_obj(db: Session, state: str, district: str) -> District | None:
     
     norm_state = normalize_state_name(state)
     norm_district = normalize_district_name(district)
-    
+
+    raw_dt = district.strip().lower()
+    norm_dt = norm_district.strip().lower()
+
+    search_terms = {raw_dt, norm_dt}
+    if raw_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[raw_dt])
+    if norm_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[norm_dt])
+    clean_terms = {clean_string(t) for t in search_terms if t}
+
     # 1. Direct query by exact or lower name matching
     d_obj = db.query(District).filter(
-        func.lower(District.name).in_([district.strip().lower(), norm_district.strip().lower()])
+        func.lower(District.name).in_(list(search_terms))
     ).first()
     if d_obj:
         return d_obj
@@ -341,11 +386,9 @@ def get_district_obj(db: Session, state: str, district: str) -> District | None:
                 
     if state_obj:
         districts = db.query(District).filter(District.state_id == state_obj.id).all()
-        clean_req = clean_string(district)
-        clean_norm = clean_string(norm_district)
         for d in districts:
             cd = clean_string(d.name)
-            if cd == clean_req or cd == clean_norm:
+            if cd in clean_terms:
                 return d
                 
         import difflib
@@ -353,16 +396,19 @@ def get_district_obj(db: Session, state: str, district: str) -> District | None:
         best_score = 0.0
         for d in districts:
             cd = clean_string(d.name)
-            score = max(
-                difflib.SequenceMatcher(None, clean_req, cd).ratio(),
-                difflib.SequenceMatcher(None, clean_norm, cd).ratio()
-            )
-            if score > best_score:
-                best_score = score
-                best_d = d
+            for term in clean_terms:
+                score = difflib.SequenceMatcher(None, term, cd).ratio()
+                if score > best_score:
+                    best_score = score
+                    best_d = d
         if best_score >= 0.7:
             return best_d
             
+    all_districts = db.query(District).all()
+    for d in all_districts:
+        if clean_string(d.name) in clean_terms:
+            return d
+
     return db.query(District).filter(
         func.lower(District.name) == func.lower(district.strip())
     ).first()
@@ -510,6 +556,12 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
                 return polygon_id
     except HTTPException as he:
         logger.error(f"[AgroMonitoring Create Failed] HTTP {he.status_code}: {he.detail}")
+        if (he.status_code == 413 or "quota" in str(he.detail).lower()) and api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
+            fallback_poly = api_polys[0]
+            polygon_id = fallback_poly.get("id")
+            if polygon_id:
+                logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered polygon {polygon_id} ({fallback_poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
+                return polygon_id
         raise he
     except Exception as e:
         logger.error(f"[AgroMonitoring Create Error] {e}")
@@ -664,8 +716,8 @@ def fetch_satellite_indices_and_images(db: Session, state: str, district: str, c
     
     image_retrieval_success = "SUCCESS" if truecolor else "FAILED"
     
-    # 4. Fetch statistics for indices: ndvi, evi, evi2, ndwi, nri, dswi
-    indices = ["ndvi", "evi", "evi2", "ndwi", "nri", "dswi"]
+    # 4. Fetch statistics for primary indices: ndvi, evi, ndwi
+    indices = ["ndvi", "evi", "ndwi"]
     stats_data = {}
     
     scene_stats = latest_scene.get("stats", {})
@@ -1154,6 +1206,9 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         except Exception as we:
             logger.warning(f"[Weather] Could not fetch district weather: {we}")
 
+    crop_has_field_boundary = bool(crop.boundary_geojson)
+    analysis_scope = "field" if crop_has_field_boundary else "district"
+
     return {
         "crop_id": crop.id,
         "crop_name": crop_name,
@@ -1162,9 +1217,11 @@ def calculate_crop_satellite_analysis(db: Session, crop) -> dict:
         "area_acres": crop.area_acres,
         "cultivated_area_acres": crop.area_acres,
         "area_scope": "crop_in_district",
+        "analysis_scope": analysis_scope,
         "satellite_available": has_real_satellite,
         "satellite_status": satellite_status if has_real_satellite else "SATELLITE DATA UNAVAILABLE",
         "satellite_platform": "Sentinel-2" if has_real_satellite else None,
+        "satellite_source": data_source,
         "observation_date": observation_date,
         "data_status": "REAL_DATA" if has_real_satellite else "NO_DATA",
         "health": health_obj,

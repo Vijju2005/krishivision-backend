@@ -1452,7 +1452,7 @@ def generate_pdf_report(
     # Growth details KPI cards
     cards4 = [
         make_kpi_card("Current Stage", growth_stage),
-        make_kpi_card("Expected Next Stage", "Flowering" if growth_stage == "Vegetative Growth" else "Maturity"),
+        make_kpi_card("Expected Next Stage", "Growth stage unavailable" if has_no_satellite else ("Flowering" if growth_stage == "Vegetative Growth" else "Maturity")),
         make_kpi_card("Stage Progress", f"{'45%' if growth_stage == 'Vegetative Growth' else '15%'}" if not has_no_satellite else "Not Available"),
         make_kpi_card("Confidence Index", f"{confidence:.1f}%" if not has_no_satellite else "0.0%")
     ]

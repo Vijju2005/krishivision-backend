@@ -51,7 +51,7 @@ def normalize_district_name(district: str) -> str:
 
 def get_api_key() -> str:
     # Read strictly from environment/dot-env config
-    return os.getenv("DATA_GOV_API_KEY", "")
+    return os.getenv("DATA_GOV_API_KEY", "579b464db66ec23bdd000001cdd3946328c642646d61033230303b62").strip()
 
 def get_base_url() -> str:
     return os.getenv("DATA_GOV_BASE_URL", "https://api.data.gov.in/resource/35be999b-0208-4354-b557-f6ca9a5355de")

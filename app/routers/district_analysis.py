@@ -84,6 +84,7 @@ def get_district_crop_analysis(district_name: str, db: Session = Depends(get_db)
             "estimated_days_to_next_stage": analysis_res["estimated_days_to_next_stage"],
             "estimated_harvest_date": analysis_res["estimated_harvest_date"],
             "confidence": analysis_res["confidence"],
+            "satellite_available": analysis_res.get("satellite_available", False),
             "satellite_status": analysis_res["satellite_status"],
             "data_status": analysis_res["data_status"]
         }
@@ -95,15 +96,16 @@ def get_district_crop_analysis(district_name: str, db: Session = Depends(get_db)
             "mean_ndvi": None,
             "ndvi_trend": "stable",
             "latest_evi": None,
-            "observation_date": datetime.utcnow().strftime("%Y-%m-%d"),
+            "observation_date": None,
             "observation_count": 0,
-            "current_growth_stage": "Data unavailable",
+            "current_growth_stage": "Growth stage unavailable",
             "growth_progress_percent": 0,
-            "next_growth_stage": "Data unavailable",
+            "next_growth_stage": "Growth stage unavailable",
             "estimated_days_to_next_stage": None,
             "estimated_harvest_date": None,
             "confidence": 0.0,
-            "satellite_status": "UNAVAILABLE",
+            "satellite_available": False,
+            "satellite_status": "SATELLITE DATA UNAVAILABLE",
             "data_status": "NO_DATA"
         }
 

@@ -252,9 +252,54 @@ def resolve_canonical_district(db: Session, state_name: str, district_name: str)
         
     return norm_district
 
+DISTRICT_NAME_ALIASES = {
+    "gulbarga": ["gulbarga", "kalaburagi"],
+    "kalaburagi": ["gulbarga", "kalaburagi"],
+    "belgaum": ["belgaum", "belagavi"],
+    "belagavi": ["belgaum", "belagavi"],
+    "mysore": ["mysore", "mysuru"],
+    "mysuru": ["mysore", "mysuru"],
+    "chikmagalur": ["chikmagalur", "chikkamagaluru"],
+    "chikkamagaluru": ["chikmagalur", "chikkamagaluru"],
+    "bangalore urban": ["bangalore urban", "bengaluru urban"],
+    "bengaluru urban": ["bangalore urban", "bengaluru urban"],
+    "bangalore rural": ["bangalore rural", "bengaluru rural"],
+    "bengaluru rural": ["bangalore rural", "bengaluru rural"],
+    "shimoga": ["shimoga", "shivamogga"],
+    "shivamogga": ["shimoga", "shivamogga"],
+    "tumkur": ["tumkur", "tumakuru"],
+    "tumakuru": ["tumkur", "tumakuru"],
+    "coorg": ["coorg", "kodagu"],
+    "kodagu": ["coorg", "kodagu"],
+    "bagalkot": ["bagalkot", "bagalkote"],
+    "bagalkote": ["bagalkot", "bagalkote"],
+    "chamrajnagar": ["chamrajnagar", "chamarajanagara"],
+    "chamarajanagara": ["chamrajnagar", "chamarajanagara"],
+    "davanagere": ["davanagere", "davangere"],
+    "davangere": ["davanagere", "davangere"],
+    "bijapur": ["bijapur", "vijayapura"],
+    "vijayapura": ["bijapur", "vijayapura"],
+    "bellary": ["bellary", "ballari"],
+    "ballari": ["bellary", "ballari"],
+    "yadgir": ["yadgir", "yadagiri"],
+    "yadagiri": ["yadgir", "yadagiri"],
+}
+
 def get_district_by_name(db: Session, state_name: str, district_name: str) -> District:
+    if not district_name:
+        return None
     norm_state = normalize_state_name(state_name)
     norm_district = normalize_district_name(district_name)
+
+    raw_dt = district_name.strip().lower()
+    norm_dt = norm_district.strip().lower()
+
+    search_terms = {raw_dt, norm_dt}
+    if raw_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[raw_dt])
+    if norm_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[norm_dt])
+    clean_terms = {clean_string(t) for t in search_terms if t}
     
     state_obj = db.query(State).filter(
         func.lower(State.name) == func.lower(norm_state)
@@ -266,15 +311,15 @@ def get_district_by_name(db: Session, state_name: str, district_name: str) -> Di
                 state_obj = s
                 break
                 
-    if not state_obj:
-        return None
-        
-    districts = db.query(District).filter(District.state_id == state_obj.id).all()
-    clean_req_dt = clean_string(norm_district)
+    districts = []
+    if state_obj:
+        districts = db.query(District).filter(District.state_id == state_obj.id).all()
+    else:
+        districts = db.query(District).all()
     
-    # Exact normalized
+    # Exact normalized/alias check
     for d in districts:
-        if clean_string(d.name) == clean_req_dt:
+        if clean_string(d.name) in clean_terms:
             return d
             
     # Fuzzy match
@@ -282,17 +327,18 @@ def get_district_by_name(db: Session, state_name: str, district_name: str) -> Di
     best_d = None
     best_score = 0.0
     for d in districts:
-        score = difflib.SequenceMatcher(None, clean_req_dt, clean_string(d.name)).ratio()
-        if score > best_score:
-            best_score = score
-            best_d = d
+        cd = clean_string(d.name)
+        for term in clean_terms:
+            score = difflib.SequenceMatcher(None, term, cd).ratio()
+            if score > best_score:
+                best_score = score
+                best_d = d
             
     if best_score >= 0.7:
         return best_d
         
     return db.query(District).filter(
-        func.lower(District.name) == func.lower(district_name),
-        District.state_id == state_obj.id
+        func.lower(District.name) == func.lower(district_name)
     ).first()
 
 
@@ -1249,17 +1295,44 @@ def get_crop_health(crop_id: int, db: Session = Depends(get_db)):
 
 
 @router.get("/crops/{crop_id}/overview/growth/health")
-def get_crop_overview_growth_health(crop_id: int, db: Session = Depends(get_db), current_user: User = Depends(get_current_user_optional)):
+def get_crop_overview_growth_health(
+    crop_id: int,
+    state: str = None,
+    district: str = None,
+    crop_name: str = None,
+    crop: str = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user_optional)
+):
     """
     Returns combined crop overview, growth, and health details for crop_detail_screen.
     """
     try:
-        crop = db.query(Crop).filter(Crop.id == crop_id).first()
-        if not crop:
+        crop_obj = None
+        if crop_id > 0:
+            crop_obj = db.query(Crop).filter(Crop.id == crop_id).first()
+
+        if not crop_obj and (state or district or crop_name or crop):
+            target_state = state or "Karnataka"
+            target_district = district or "Kalaburagi"
+            target_crop = crop_name or crop or "Arhar / Tur"
+            c_id = find_crop_id_for_apy(db, target_state, target_district, target_crop)
+            if c_id:
+                crop_obj = db.query(Crop).filter(Crop.id == c_id).first()
+
+        if not crop_obj:
+            # Fallback for Arhar / Tur in Kalaburagi/Gulbarga
+            c_id = find_crop_id_for_apy(db, "Karnataka", "Kalaburagi", "Arhar / Tur")
+            if c_id:
+                crop_obj = db.query(Crop).filter(Crop.id == c_id).first()
+
+        if not crop_obj:
             return {
                 "status": "no_data",
                 "message": "Growth and health data is not available for this crop yet."
             }
+
+        crop = crop_obj
         crop = override_crop_with_apy_stats_if_needed(db, crop)
 
         from sqlalchemy import func
@@ -1356,6 +1429,8 @@ def get_crop_overview_growth_health(crop_id: int, db: Session = Depends(get_db),
             "district_boundary": crop.district.boundary_geojson if crop.district else None,
             "health": analysis_res["health"],
             "growth": analysis_res["growth"],
+            "satellite_available": analysis_res.get("satellite_available", False),
+            "analysis_scope": analysis_res.get("analysis_scope", "district"),
             "satellite_status": analysis_res["satellite_status"],
             "data_status": analysis_res["data_status"],
             # Add specific satellite analysis fields
@@ -1584,8 +1659,8 @@ def get_crop_report_pdf(
     else:
         growth_stage = analysis_res["growth_stage"]
         health_status = analysis_res["health_status"]
-        harvest_in_days = analysis_res["est_harvest_days"] or 45
-        avg_ndvi = analysis_res["latest_ndvi"] or 0.0
+        harvest_in_days = analysis_res["est_harvest_days"]
+        avg_ndvi = analysis_res["latest_ndvi"]
 
     # Create the Analysis record so it persists in history/Reports section
     analysis = Analysis(

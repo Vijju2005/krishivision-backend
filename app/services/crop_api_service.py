@@ -258,9 +258,54 @@ def resolve_canonical_district(db: Session, state_name: str, district_name: str)
         
     return norm_district
 
+DISTRICT_NAME_ALIASES = {
+    "gulbarga": ["gulbarga", "kalaburagi"],
+    "kalaburagi": ["gulbarga", "kalaburagi"],
+    "belgaum": ["belgaum", "belagavi"],
+    "belagavi": ["belgaum", "belagavi"],
+    "mysore": ["mysore", "mysuru"],
+    "mysuru": ["mysore", "mysuru"],
+    "chikmagalur": ["chikmagalur", "chikkamagaluru"],
+    "chikkamagaluru": ["chikmagalur", "chikkamagaluru"],
+    "bangalore urban": ["bangalore urban", "bengaluru urban"],
+    "bengaluru urban": ["bangalore urban", "bengaluru urban"],
+    "bangalore rural": ["bangalore rural", "bengaluru rural"],
+    "bengaluru rural": ["bangalore rural", "bengaluru rural"],
+    "shimoga": ["shimoga", "shivamogga"],
+    "shivamogga": ["shimoga", "shivamogga"],
+    "tumkur": ["tumkur", "tumakuru"],
+    "tumakuru": ["tumkur", "tumakuru"],
+    "coorg": ["coorg", "kodagu"],
+    "kodagu": ["coorg", "kodagu"],
+    "bagalkot": ["bagalkot", "bagalkote"],
+    "bagalkote": ["bagalkot", "bagalkote"],
+    "chamrajnagar": ["chamrajnagar", "chamarajanagara"],
+    "chamarajanagara": ["chamrajnagar", "chamarajanagara"],
+    "davanagere": ["davanagere", "davangere"],
+    "davangere": ["davanagere", "davangere"],
+    "bijapur": ["bijapur", "vijayapura"],
+    "vijayapura": ["bijapur", "vijayapura"],
+    "bellary": ["bellary", "ballari"],
+    "ballari": ["bellary", "ballari"],
+    "yadgir": ["yadgir", "yadagiri"],
+    "yadagiri": ["yadgir", "yadagiri"],
+}
+
 def get_district_by_name(db: Session, state_name: str, district_name: str) -> District:
+    if not district_name:
+        return None
     norm_state = normalize_state_name(state_name)
     norm_district = normalize_district_name(district_name)
+
+    raw_dt = district_name.strip().lower()
+    norm_dt = norm_district.strip().lower()
+
+    search_terms = {raw_dt, norm_dt}
+    if raw_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[raw_dt])
+    if norm_dt in DISTRICT_NAME_ALIASES:
+        search_terms.update(DISTRICT_NAME_ALIASES[norm_dt])
+    clean_terms = {clean_string(t) for t in search_terms if t}
     
     state_obj = db.query(State).filter(
         func.lower(State.name) == func.lower(norm_state)
@@ -272,15 +317,15 @@ def get_district_by_name(db: Session, state_name: str, district_name: str) -> Di
                 state_obj = s
                 break
                 
-    if not state_obj:
-        return None
-        
-    districts = db.query(District).filter(District.state_id == state_obj.id).all()
-    clean_req_dt = clean_string(norm_district)
+    districts = []
+    if state_obj:
+        districts = db.query(District).filter(District.state_id == state_obj.id).all()
+    else:
+        districts = db.query(District).all()
     
-    # Exact normalized
+    # Exact normalized/alias check
     for d in districts:
-        if clean_string(d.name) == clean_req_dt:
+        if clean_string(d.name) in clean_terms:
             return d
             
     # Fuzzy match
@@ -288,17 +333,18 @@ def get_district_by_name(db: Session, state_name: str, district_name: str) -> Di
     best_d = None
     best_score = 0.0
     for d in districts:
-        score = difflib.SequenceMatcher(None, clean_req_dt, clean_string(d.name)).ratio()
-        if score > best_score:
-            best_score = score
-            best_d = d
+        cd = clean_string(d.name)
+        for term in clean_terms:
+            score = difflib.SequenceMatcher(None, term, cd).ratio()
+            if score > best_score:
+                best_score = score
+                best_d = d
             
     if best_score >= 0.7:
         return best_d
         
     return db.query(District).filter(
-        func.lower(District.name) == func.lower(district_name),
-        District.state_id == state_obj.id
+        func.lower(District.name) == func.lower(district_name)
     ).first()
 
 
