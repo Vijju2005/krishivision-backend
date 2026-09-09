@@ -451,9 +451,15 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
 
     if api_polys and isinstance(api_polys, list):
         district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
+        crop_search_terms = [norm_crop.lower(), crop.strip().lower()]
+        if "arhar" in crop.lower() or "tur" in crop.lower():
+            crop_search_terms.extend(["arhar", "tur", "pigeon pea"])
+        elif "soy" in crop.lower():
+            crop_search_terms.extend(["soybean", "soyabean"])
+
         for poly in api_polys:
             name = poly.get("name", "").lower()
-            if any(term in name for term in district_search_terms) and norm_crop.lower() in name:
+            if any(term in name for term in district_search_terms) and any(cn in name for cn in crop_search_terms if len(cn) > 1):
                 polygon_id = poly.get("id")
                 if polygon_id:
                     # Cache in local DB
@@ -558,9 +564,15 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
         logger.error(f"[AgroMonitoring Create Failed] HTTP {he.status_code}: {he.detail}")
         if (he.status_code == 413 or "quota" in str(he.detail).lower()) and api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
             district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
+            crop_search_terms = [norm_crop.lower(), crop.strip().lower()]
+            if "arhar" in crop.lower() or "tur" in crop.lower():
+                crop_search_terms.extend(["arhar", "tur", "pigeon pea"])
+            elif "soy" in crop.lower():
+                crop_search_terms.extend(["soybean", "soyabean"])
+
             for poly in api_polys:
                 p_name = poly.get("name", "").lower()
-                if any(term in p_name for term in district_search_terms) and norm_crop.lower() in p_name:
+                if any(term in p_name for term in district_search_terms) and any(cn in p_name for cn in crop_search_terms if len(cn) > 1):
                     polygon_id = poly.get("id")
                     if polygon_id:
                         logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered matching polygon {polygon_id} ({poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
