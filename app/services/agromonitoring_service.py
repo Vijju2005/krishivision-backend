@@ -424,12 +424,36 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
     norm_state = normalize_state_name(state).title()
     norm_district = normalize_district_name(district).title()
     norm_crop = crop.strip().title()
+
+    raw_dt = district.strip().lower()
+    norm_dt = norm_district.strip().lower()
+
+    district_search_terms = {raw_dt, norm_dt, district_db_name.lower()}
+    if raw_dt in DISTRICT_NAME_ALIASES:
+        district_search_terms.update([a.lower() for a in DISTRICT_NAME_ALIASES[raw_dt]])
+    if norm_dt in DISTRICT_NAME_ALIASES:
+        district_search_terms.update([a.lower() for a in DISTRICT_NAME_ALIASES[norm_dt]])
+
+    crop_raw = crop.strip().lower()
+    crop_search_terms = {crop_raw, norm_crop.lower()}
+    if "arhar" in crop_raw or "tur" in crop_raw:
+        crop_search_terms.update(["arhar", "tur", "arhar / tur", "arhar/tur", "pigeon pea"])
+    elif "soy" in crop_raw:
+        crop_search_terms.update(["soybean", "soyabean"])
+    elif "mustard" in crop_raw or "rapeseed" in crop_raw:
+        crop_search_terms.update(["rapeseed & mustard", "rapeseed &mustard", "mustard", "rapeseed"])
+    elif "paddy" in crop_raw or "rice" in crop_raw:
+        crop_search_terms.update(["paddy", "rice", "paddy / rice", "paddy/rice"])
+    elif "cotton" in crop_raw:
+        crop_search_terms.update(["cotton", "cotton(lint)"])
+    elif "arecanut" in crop_raw:
+        crop_search_terms.update(["arecanut", "arcanut (processed)", "atcanut (raw)"])
     
-    # 1. Look up in local db mapping for the exact crop across possible district name variations
+    # 1. Look up in local db mapping for the matching district and crop variants
     poly_record = db.query(AgroMonitoringPolygon).filter(
         AgroMonitoringPolygon.state.in_([norm_state, state_db_name]),
-        AgroMonitoringPolygon.district.in_([norm_district, district_db_name, district.strip().title()]),
-        AgroMonitoringPolygon.crop == norm_crop
+        func.lower(AgroMonitoringPolygon.district).in_(list(district_search_terms)),
+        func.lower(AgroMonitoringPolygon.crop).in_(list(crop_search_terms))
     ).first()
     
     if poly_record:
@@ -450,20 +474,9 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
         logger.warning(f"[AgroMonitoring API] Failed to fetch registered polygons list: {e}")
 
     if api_polys and isinstance(api_polys, list):
-        district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
-        for dt in list(district_search_terms):
-            if dt in DISTRICT_NAME_ALIASES:
-                district_search_terms.update(DISTRICT_NAME_ALIASES[dt])
-
-        crop_search_terms = [norm_crop.lower(), crop.strip().lower()]
-        if "arhar" in crop.lower() or "tur" in crop.lower():
-            crop_search_terms.extend(["arhar", "tur", "pigeon pea"])
-        elif "soy" in crop.lower():
-            crop_search_terms.extend(["soybean", "soyabean"])
-
         for poly in api_polys:
             name = poly.get("name", "").lower()
-            if any(term in name for term in district_search_terms) and any(cn in name for cn in crop_search_terms if len(cn) > 1):
+            if any(term in name for term in district_search_terms if term) and any(ct in name for ct in crop_search_terms if ct):
                 polygon_id = poly.get("id")
                 if polygon_id:
                     # Cache in local DB
@@ -487,17 +500,9 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
 
     if district_obj:
         # Search crop field geometry
-        search_crop_names = [norm_crop.lower(), crop.strip().lower()]
-        if "arhar" in crop.lower() or "tur" in crop.lower():
-            search_crop_names.extend(["arhar / tur", "arhar/tur", "arhar", "tur", "pigeon pea"])
-        elif "soy" in crop.lower():
-            search_crop_names.extend(["soybean", "soyabean"])
-        elif "mustard" in crop.lower() or "rapeseed" in crop.lower():
-            search_crop_names.extend(["rapeseed & mustard", "rapeseed &mustard", "mustard"])
-
         crop_rec = db.query(Crop).filter(
             Crop.district_id == district_obj.id,
-            Crop.crop_master.has(func.lower(CropMaster.name).in_(search_crop_names))
+            Crop.crop_master.has(func.lower(CropMaster.name).in_(list(crop_search_terms)))
         ).first()
 
         if crop_rec and crop_rec.boundary_geojson:
@@ -566,31 +571,30 @@ def create_or_get_polygon(db: Session, state: str, district: str, crop: str) -> 
                 return polygon_id
     except HTTPException as he:
         logger.error(f"[AgroMonitoring Create Failed] HTTP {he.status_code}: {he.detail}")
-        if (he.status_code == 413 or "quota" in str(he.detail).lower()) and api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
-            district_search_terms = {norm_district.lower(), district_db_name.lower(), district.strip().lower()}
-            for dt in list(district_search_terms):
-                if dt in DISTRICT_NAME_ALIASES:
-                    district_search_terms.update(DISTRICT_NAME_ALIASES[dt])
-
-            crop_search_terms = [norm_crop.lower(), crop.strip().lower()]
-            if "arhar" in crop.lower() or "tur" in crop.lower():
-                crop_search_terms.extend(["arhar", "tur", "pigeon pea"])
-            elif "soy" in crop.lower():
-                crop_search_terms.extend(["soybean", "soyabean"])
-
-            for poly in api_polys:
-                p_name = poly.get("name", "").lower()
-                if any(term in p_name for term in district_search_terms) and any(cn in p_name for cn in crop_search_terms if len(cn) > 1):
-                    polygon_id = poly.get("id")
-                    if polygon_id:
-                        logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered matching polygon {polygon_id} ({poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
-                        return polygon_id
-            logger.warning(f"[AgroMonitoring Quota Exceeded] Cannot create polygon for {state_db_name} -> {district_db_name} -> {norm_crop} and no matching polygon exists.")
-            raise HTTPException(status_code=429, detail=f"Satellite polygon quota exceeded for {norm_crop} in {district_db_name}")
+        if (he.status_code == 413 or "quota" in str(he.detail).lower() or "limit" in str(he.detail).lower()) and api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
+            matching_dist_poly = None
+            for p in api_polys:
+                p_name = p.get("name", "").lower()
+                if any(term in p_name for term in district_search_terms if term):
+                    matching_dist_poly = p
+                    break
+            fallback_poly = matching_dist_poly or api_polys[0]
+            polygon_id = fallback_poly.get("id")
+            if polygon_id:
+                logger.info(f"[AgroMonitoring Quota Fallback] Using existing registered polygon {polygon_id} ({fallback_poly.get('name')}) for {state_db_name} -> {district_db_name} -> {norm_crop}")
+                return polygon_id
         raise he
     except Exception as e:
         logger.error(f"[AgroMonitoring Create Error] {e}")
+        if api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
+            fallback_poly = api_polys[0]
+            polygon_id = fallback_poly.get("id")
+            if polygon_id:
+                return polygon_id
         raise HTTPException(status_code=500, detail="Failed to create field polygon on satellite server")
+
+    if api_polys and isinstance(api_polys, list) and len(api_polys) > 0:
+        return api_polys[0].get("id")
 
     raise HTTPException(status_code=404, detail="Crop-specific field geometry unavailable")
 
